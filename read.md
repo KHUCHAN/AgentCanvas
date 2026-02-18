@@ -1,45 +1,78 @@
-# AgentCanvas Quick Read
+# AgentCanvas
 
-AgentCanvas는 VS Code 확장으로 멀티 에이전트 설계를 캔버스에서 시각적으로 구성하고 운영할 수 있도록 만든 도구입니다.
+AgentCanvas is a VS Code extension for designing and operating multi-agent systems on a visual canvas.
+It combines agent modeling, role/delegation management, prompt-driven team generation, and interaction pattern composition in one workspace.
 
-## 핵심 기능
-- n8n 스타일 Canvas UI
-- Agent 노드 생성/수정/삭제
-- Agent Role/Delegation(Orchestrator -> Worker) 설정
-- Skill/MCP 드래그 앤 드롭 할당
-- Common Rule 관리
-- AI Prompt 기반 팀 자동 생성(Claude/Gemini/Codex/Aider/Custom)
-- Interaction Pattern 라이브러리(20개) 삽입
-- Flow 저장/로드: `.agentcanvas/flows/*.yaml`
-- Interaction 이벤트 로그: `.agentcanvas/logs/<flow>/<date>.jsonl`
+## What This Project Includes
 
-## 실행 방법
+- n8n-style canvas UI for agent orchestration
+- Agent lifecycle management
+  - Create/Delete custom agents
+  - Role, description, system prompt, avatar, color editing
+  - Orchestrator delegation links
+- Skill and MCP assignment
+  - Drag-and-drop from library to agent nodes
+  - Assign/Unassign from agent detail modal
+- AI Prompt workflow
+  - CLI backend detection (Auto / Claude / Gemini / Codex / Aider / Custom)
+  - Prompt-to-team generation
+  - Preview and apply generated structures
+  - Prompt history (reapply/delete)
+- Interaction Pattern Library
+  - 20 predefined interaction patterns
+  - Pattern insert via button or drag/drop
+  - Interaction edge inspector with termination validation
+- Flow and observability support
+  - Save/Load flow files: `.agentcanvas/flows/*.yaml`
+  - Interaction event logs: `.agentcanvas/logs/<flow>/<date>.jsonl`
+- Quality gates
+  - Build + typecheck pipeline
+  - Integration test scenarios and runnable integration script
+
+## Architecture Overview
+
+- `extension/`: VS Code extension backend (discovery, messaging, flow/log persistence, CLI execution)
+- `webview-ui/`: React + React Flow frontend (canvas, node library, inspector, modal workflows)
+- `resources/patterns/`: interaction pattern JSON templates
+- `docs/interaction-patterns/patterns/`: interaction pattern documentation
+- `scripts/integration-tests.cjs`: integration test runner
+
+## Quick Start
+
 ```bash
 npm install
 npm --prefix webview-ui install
 npm run check
 ```
 
-VS Code에서:
-1. 이 폴더 열기
-2. `F5`로 Extension Development Host 실행
-3. 명령 팔레트에서 `AgentCanvas: Open`
+Then in VS Code:
 
-## 통합 테스트
+1. Open this project folder.
+2. Press `F5` to launch Extension Development Host.
+3. Open Command Palette and run `AgentCanvas: Open`.
+
+## Integration Tests
+
 ```bash
 npm run test:integration
 ```
 
-현재 통합 테스트는 다음 시나리오를 검증합니다.
-- 빌드/타입체크
-- 패턴 문서/템플릿 정합성
-- Prompt 파서/히스토리
-- Agent 프로필 CRUD
-- CLI 백엔드 감지
-- Flow 저장/로드
-- Interaction 로그 기록
+Covers:
 
-## 참고 문서
+- Build/type integrity
+- Pattern assets/schema consistency
+- Prompt parser/history roundtrip
+- Agent profile CRUD/assignment/delegation
+- CLI backend detection shape
+- Flow save/load/list roundtrip
+- Interaction JSONL log append
+
+## UI Screenshot
+
+![AgentCanvas UI](docs/screenshots/agentcanvas-ui.png)
+
+## Related Docs
+
 - `README.md`
 - `INTEGRATION_TEST_SCENARIOS.md`
 - `AGENT_SYSTEM.md`
