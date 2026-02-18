@@ -51,6 +51,43 @@ Then in VS Code:
 2. Press `F5` to launch Extension Development Host.
 3. Open Command Palette and run `AgentCanvas: Open`.
 
+## How to Use
+
+### 1) Build your agent graph
+
+1. Click `New Agent` to create custom agents.
+2. Double-click an agent node to open `Agent Detail`.
+3. In `Overview`, set role, description, and orchestrator options.
+4. In `Delegates To`, choose worker agents for orchestration links.
+
+### 2) Assign skills and MCP servers
+
+1. Open `Node Library` on the right panel.
+2. Drag a `Skill` item onto an agent node to assign it.
+3. Drag an `MCP Server` item onto an agent node to assign it.
+4. Use `Agent Detail -> Skills/MCP` tabs to unassign or adjust mappings.
+
+### 3) Generate teams from prompt
+
+1. Open the `AI Prompt` tab.
+2. Select backend (`Auto`, `Claude`, `Gemini`, `Codex`, `Aider`, or `Custom`).
+3. Enter a request (for example: code review team with orchestrator + workers).
+4. Click `Generate Agent Team`.
+5. Review the preview modal and click `Apply to Canvas`.
+
+### 4) Use interaction patterns
+
+1. In `Node Library`, find `Interaction Patterns`.
+2. Click `Insert` or drag a pattern onto the canvas.
+3. Click an interaction edge, open Inspector, and edit interaction JSON.
+4. Keep a valid `termination` field (required for saving valid interaction config).
+
+### 5) Save and reload flows
+
+1. Click `Save Flow` to persist current interaction graph.
+2. Click `Load Flow` and enter/select a saved flow name.
+3. Check logs in `.agentcanvas/logs/<flow>/<date>.jsonl` for interaction events.
+
 ## Integration Tests
 
 ```bash
