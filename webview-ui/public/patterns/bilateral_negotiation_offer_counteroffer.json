@@ -1,0 +1,70 @@
+{
+  "id": "bilateral_negotiation_offer_counteroffer",
+  "name": "Bilateral Negotiation",
+  "summary": "Bilateral Negotiation pattern for negotiate",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "bilateral_negotiation_offer_counteroffer_n1",
+      "data": {
+        "role": "Proposer",
+        "label": "Proposer"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "bilateral_negotiation_offer_counteroffer_n2",
+      "data": {
+        "role": "Responder",
+        "label": "Responder"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "bilateral_negotiation_offer_counteroffer_e1",
+      "source": "bilateral_negotiation_offer_counteroffer_n1",
+      "target": "bilateral_negotiation_offer_counteroffer_n2",
+      "label": "bilateral_negotiation_offer_counteroffer",
+      "data": {
+        "patternId": "bilateral_negotiation_offer_counteroffer",
+        "topology": "p2p",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 5
+        },
+        "params": {
+          "intent": "negotiate",
+          "rounds": 5
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "id": "factcheck_tool_verifier",
+  "name": "Factcheck Tool Verifier",
+  "summary": "Factcheck Tool Verifier pattern for verify",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "factcheck_tool_verifier_n1",
+      "data": {
+        "role": "Producer",
+        "label": "Producer"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "factcheck_tool_verifier_n2",
+      "data": {
+        "role": "Verifier",
+        "label": "Verifier"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "system",
+      "id": "factcheck_tool_verifier_n3",
+      "data": {
+        "role": "Judge",
+        "label": "Judge"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "factcheck_tool_verifier_e1",
+      "source": "factcheck_tool_verifier_n1",
+      "target": "factcheck_tool_verifier_n2",
+      "label": "factcheck_tool_verifier",
+      "data": {
+        "patternId": "factcheck_tool_verifier",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "quality_gate",
+          "metric": "tool_check_pass",
+          "op": ">=",
+          "value": 1
+        },
+        "params": {
+          "intent": "verify"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "factcheck_tool_verifier_e2",
+      "source": "factcheck_tool_verifier_n1",
+      "target": "factcheck_tool_verifier_n3",
+      "label": "factcheck_tool_verifier",
+      "data": {
+        "patternId": "factcheck_tool_verifier",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "quality_gate",
+          "metric": "tool_check_pass",
+          "op": ">=",
+          "value": 1
+        },
+        "params": {
+          "intent": "verify"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

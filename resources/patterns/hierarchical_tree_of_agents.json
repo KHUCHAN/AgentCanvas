@@ -1,0 +1,107 @@
+{
+  "id": "hierarchical_tree_of_agents",
+  "name": "Hierarchical Tree",
+  "summary": "Hierarchical Tree pattern for solve",
+  "nodes": [
+    {
+      "type": "system",
+      "id": "hierarchical_tree_of_agents_n1",
+      "data": {
+        "role": "RootManager",
+        "label": "RootManager"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "hierarchical_tree_of_agents_n2",
+      "data": {
+        "role": "SubManager",
+        "label": "SubManager"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "hierarchical_tree_of_agents_n3",
+      "data": {
+        "role": "Worker",
+        "label": "Worker"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "hierarchical_tree_of_agents_e1",
+      "source": "hierarchical_tree_of_agents_n1",
+      "target": "hierarchical_tree_of_agents_n2",
+      "label": "hierarchical_tree_of_agents",
+      "data": {
+        "patternId": "hierarchical_tree_of_agents",
+        "topology": "manager_worker",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 3
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 3
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "hierarchical_tree_of_agents_e2",
+      "source": "hierarchical_tree_of_agents_n1",
+      "target": "hierarchical_tree_of_agents_n3",
+      "label": "hierarchical_tree_of_agents",
+      "data": {
+        "patternId": "hierarchical_tree_of_agents",
+        "topology": "manager_worker",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 3
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 3
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

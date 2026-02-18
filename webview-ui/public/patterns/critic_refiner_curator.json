@@ -1,0 +1,144 @@
+{
+  "id": "critic_refiner_curator",
+  "name": "Critic Refiner Curator",
+  "summary": "Critic Refiner Curator pattern for verify",
+  "nodes": [
+    {
+      "type": "system",
+      "id": "critic_refiner_curator_n1",
+      "data": {
+        "role": "Judge",
+        "label": "Judge"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "critic_refiner_curator_n2",
+      "data": {
+        "role": "Critic",
+        "label": "Critic"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "critic_refiner_curator_n3",
+      "data": {
+        "role": "Refiner",
+        "label": "Refiner"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "critic_refiner_curator_n4",
+      "data": {
+        "role": "Curator",
+        "label": "Curator"
+      },
+      "position": {
+        "x": 660,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "critic_refiner_curator_e1",
+      "source": "critic_refiner_curator_n1",
+      "target": "critic_refiner_curator_n2",
+      "label": "critic_refiner_curator",
+      "data": {
+        "patternId": "critic_refiner_curator",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 3
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 3
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "critic_refiner_curator_e2",
+      "source": "critic_refiner_curator_n1",
+      "target": "critic_refiner_curator_n3",
+      "label": "critic_refiner_curator",
+      "data": {
+        "patternId": "critic_refiner_curator",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 3
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 3
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "critic_refiner_curator_e3",
+      "source": "critic_refiner_curator_n1",
+      "target": "critic_refiner_curator_n4",
+      "label": "critic_refiner_curator",
+      "data": {
+        "patternId": "critic_refiner_curator",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 3
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 3
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

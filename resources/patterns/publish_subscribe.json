@@ -1,0 +1,105 @@
+{
+  "id": "publish_subscribe",
+  "name": "Publish Subscribe",
+  "summary": "Publish Subscribe pattern for align",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "publish_subscribe_n1",
+      "data": {
+        "role": "Publisher",
+        "label": "Publisher"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "publish_subscribe_n2",
+      "data": {
+        "role": "SubscriberA",
+        "label": "SubscriberA"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "publish_subscribe_n3",
+      "data": {
+        "role": "SubscriberB",
+        "label": "SubscriberB"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "publish_subscribe_e1",
+      "source": "publish_subscribe_n1",
+      "target": "publish_subscribe_n2",
+      "label": "publish_subscribe",
+      "data": {
+        "patternId": "publish_subscribe",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 180000
+        },
+        "params": {
+          "intent": "align"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "publish_subscribe_e2",
+      "source": "publish_subscribe_n1",
+      "target": "publish_subscribe_n3",
+      "label": "publish_subscribe",
+      "data": {
+        "patternId": "publish_subscribe",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 180000
+        },
+        "params": {
+          "intent": "align"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

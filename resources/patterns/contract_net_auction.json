@@ -1,0 +1,105 @@
+{
+  "id": "contract_net_auction",
+  "name": "Contract Net Auction",
+  "summary": "Contract Net Auction pattern for negotiate",
+  "nodes": [
+    {
+      "type": "system",
+      "id": "contract_net_auction_n1",
+      "data": {
+        "role": "Initiator",
+        "label": "Initiator"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "contract_net_auction_n2",
+      "data": {
+        "role": "BidderA",
+        "label": "BidderA"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "contract_net_auction_n3",
+      "data": {
+        "role": "BidderB",
+        "label": "BidderB"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "contract_net_auction_e1",
+      "source": "contract_net_auction_n1",
+      "target": "contract_net_auction_n2",
+      "label": "contract_net_auction",
+      "data": {
+        "patternId": "contract_net_auction",
+        "topology": "market_auction",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 120000
+        },
+        "params": {
+          "intent": "negotiate"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "contract_net_auction_e2",
+      "source": "contract_net_auction_n1",
+      "target": "contract_net_auction_n3",
+      "label": "contract_net_auction",
+      "data": {
+        "patternId": "contract_net_auction",
+        "topology": "market_auction",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 120000
+        },
+        "params": {
+          "intent": "negotiate"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

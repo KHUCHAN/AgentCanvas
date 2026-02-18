@@ -1,0 +1,245 @@
+[
+  {
+    "id": "manager_worker",
+    "name": "Manager Worker",
+    "summary": "Manager Worker pattern for solve",
+    "topology": "manager_worker",
+    "nodeCount": 2,
+    "edgeCount": 1,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 2
+    }
+  },
+  {
+    "id": "role_play_pair",
+    "name": "Role Play Pair",
+    "summary": "Role Play Pair pattern for align",
+    "topology": "p2p",
+    "nodeCount": 2,
+    "edgeCount": 1,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 6
+    }
+  },
+  {
+    "id": "chat_chain_pipeline",
+    "name": "Chat Chain Pipeline",
+    "summary": "Chat Chain Pipeline pattern for solve",
+    "topology": "pipeline",
+    "nodeCount": 4,
+    "edgeCount": 3,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 4
+    }
+  },
+  {
+    "id": "sop_assembly_line",
+    "name": "SOP Assembly Line",
+    "summary": "SOP Assembly Line pattern for solve",
+    "topology": "pipeline",
+    "nodeCount": 4,
+    "edgeCount": 3,
+    "termination": {
+      "type": "quality_gate",
+      "metric": "milestone_score",
+      "op": ">=",
+      "value": 0.8
+    }
+  },
+  {
+    "id": "debate_judge",
+    "name": "Debate Judge",
+    "summary": "Debate Judge pattern for verify",
+    "topology": "debate_judge",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "judge_decision"
+    }
+  },
+  {
+    "id": "critic_refiner_curator",
+    "name": "Critic Refiner Curator",
+    "summary": "Critic Refiner Curator pattern for verify",
+    "topology": "pipeline",
+    "nodeCount": 4,
+    "edgeCount": 3,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 3
+    }
+  },
+  {
+    "id": "majority_vote_with_tiebreak",
+    "name": "Majority Vote Tiebreak",
+    "summary": "Majority Vote Tiebreak pattern for verify",
+    "topology": "broadcast",
+    "nodeCount": 4,
+    "edgeCount": 3,
+    "termination": {
+      "type": "consensus_threshold",
+      "threshold": 0.6
+    }
+  },
+  {
+    "id": "self_consistency_ensemble",
+    "name": "Self Consistency Ensemble",
+    "summary": "Self Consistency Ensemble pattern for verify",
+    "topology": "broadcast",
+    "nodeCount": 4,
+    "edgeCount": 3,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 2
+    }
+  },
+  {
+    "id": "contract_net_auction",
+    "name": "Contract Net Auction",
+    "summary": "Contract Net Auction pattern for negotiate",
+    "topology": "market_auction",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "timeout_ms",
+      "ms": 120000
+    }
+  },
+  {
+    "id": "bilateral_negotiation_offer_counteroffer",
+    "name": "Bilateral Negotiation",
+    "summary": "Bilateral Negotiation pattern for negotiate",
+    "topology": "p2p",
+    "nodeCount": 2,
+    "edgeCount": 1,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 5
+    }
+  },
+  {
+    "id": "blackboard_shared_state",
+    "name": "Blackboard Shared State",
+    "summary": "Blackboard Shared State pattern for explore",
+    "topology": "blackboard",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "timeout_ms",
+      "ms": 600000
+    }
+  },
+  {
+    "id": "publish_subscribe",
+    "name": "Publish Subscribe",
+    "summary": "Publish Subscribe pattern for align",
+    "topology": "broadcast",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "timeout_ms",
+      "ms": 180000
+    }
+  },
+  {
+    "id": "broker_facilitator",
+    "name": "Broker Facilitator",
+    "summary": "Broker Facilitator pattern for solve",
+    "topology": "broker",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "timeout_ms",
+      "ms": 120000
+    }
+  },
+  {
+    "id": "router_targeted",
+    "name": "Router Targeted",
+    "summary": "Router Targeted pattern for solve",
+    "topology": "router_targeted",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "timeout_ms",
+      "ms": 120000
+    }
+  },
+  {
+    "id": "hierarchical_tree_of_agents",
+    "name": "Hierarchical Tree",
+    "summary": "Hierarchical Tree pattern for solve",
+    "topology": "manager_worker",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 3
+    }
+  },
+  {
+    "id": "redteam_defender_judge",
+    "name": "Redteam Defender Judge",
+    "summary": "Redteam Defender Judge pattern for verify",
+    "topology": "debate_judge",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 2
+    }
+  },
+  {
+    "id": "factcheck_tool_verifier",
+    "name": "Factcheck Tool Verifier",
+    "summary": "Factcheck Tool Verifier pattern for verify",
+    "topology": "pipeline",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "quality_gate",
+      "metric": "tool_check_pass",
+      "op": ">=",
+      "value": 1
+    }
+  },
+  {
+    "id": "plan_execute_observe_reflect",
+    "name": "Plan Execute Observe Reflect",
+    "summary": "Plan Execute Observe Reflect pattern for solve",
+    "topology": "pipeline",
+    "nodeCount": 4,
+    "edgeCount": 3,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 2
+    }
+  },
+  {
+    "id": "memory_sync_daily_summary",
+    "name": "Memory Sync Daily Summary",
+    "summary": "Memory Sync Daily Summary pattern for align",
+    "topology": "blackboard",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "timeout_ms",
+      "ms": 300000
+    }
+  },
+  {
+    "id": "protocol_bridge_mcp_acp_a2a_anp",
+    "name": "Protocol Bridge",
+    "summary": "Protocol Bridge pattern for align",
+    "topology": "broker",
+    "nodeCount": 3,
+    "edgeCount": 2,
+    "termination": {
+      "type": "max_rounds",
+      "rounds": 1
+    }
+  }
+]

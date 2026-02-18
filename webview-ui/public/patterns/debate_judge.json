@@ -1,0 +1,103 @@
+{
+  "id": "debate_judge",
+  "name": "Debate Judge",
+  "summary": "Debate Judge pattern for verify",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "debate_judge_n1",
+      "data": {
+        "role": "DebaterA",
+        "label": "DebaterA"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "debate_judge_n2",
+      "data": {
+        "role": "DebaterB",
+        "label": "DebaterB"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "system",
+      "id": "debate_judge_n3",
+      "data": {
+        "role": "Judge",
+        "label": "Judge"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "debate_judge_e1",
+      "source": "debate_judge_n1",
+      "target": "debate_judge_n2",
+      "label": "debate_judge",
+      "data": {
+        "patternId": "debate_judge",
+        "topology": "debate_judge",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "judge_decision"
+        },
+        "params": {
+          "intent": "verify"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "debate_judge_e2",
+      "source": "debate_judge_n1",
+      "target": "debate_judge_n3",
+      "label": "debate_judge",
+      "data": {
+        "patternId": "debate_judge",
+        "topology": "debate_judge",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "judge_decision"
+        },
+        "params": {
+          "intent": "verify"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

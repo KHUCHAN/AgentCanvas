@@ -1,0 +1,70 @@
+{
+  "id": "manager_worker",
+  "name": "Manager Worker",
+  "summary": "Manager Worker pattern for solve",
+  "nodes": [
+    {
+      "type": "system",
+      "id": "manager_worker_n1",
+      "data": {
+        "role": "Manager",
+        "label": "Manager"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "manager_worker_n2",
+      "data": {
+        "role": "Worker",
+        "label": "Worker"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "manager_worker_e1",
+      "source": "manager_worker_n1",
+      "target": "manager_worker_n2",
+      "label": "manager_worker",
+      "data": {
+        "patternId": "manager_worker",
+        "topology": "manager_worker",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

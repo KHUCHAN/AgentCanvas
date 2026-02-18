@@ -1,0 +1,144 @@
+{
+  "id": "chat_chain_pipeline",
+  "name": "Chat Chain Pipeline",
+  "summary": "Chat Chain Pipeline pattern for solve",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "chat_chain_pipeline_n1",
+      "data": {
+        "role": "Planner",
+        "label": "Planner"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "chat_chain_pipeline_n2",
+      "data": {
+        "role": "Designer",
+        "label": "Designer"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "chat_chain_pipeline_n3",
+      "data": {
+        "role": "Coder",
+        "label": "Coder"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "chat_chain_pipeline_n4",
+      "data": {
+        "role": "Tester",
+        "label": "Tester"
+      },
+      "position": {
+        "x": 660,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "chat_chain_pipeline_e1",
+      "source": "chat_chain_pipeline_n1",
+      "target": "chat_chain_pipeline_n2",
+      "label": "chat_chain_pipeline",
+      "data": {
+        "patternId": "chat_chain_pipeline",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 4
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 4
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "chat_chain_pipeline_e2",
+      "source": "chat_chain_pipeline_n1",
+      "target": "chat_chain_pipeline_n3",
+      "label": "chat_chain_pipeline",
+      "data": {
+        "patternId": "chat_chain_pipeline",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 4
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 4
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "chat_chain_pipeline_e3",
+      "source": "chat_chain_pipeline_n1",
+      "target": "chat_chain_pipeline_n4",
+      "label": "chat_chain_pipeline",
+      "data": {
+        "patternId": "chat_chain_pipeline",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 4
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 4
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

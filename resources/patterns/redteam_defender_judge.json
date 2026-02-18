@@ -1,0 +1,107 @@
+{
+  "id": "redteam_defender_judge",
+  "name": "Redteam Defender Judge",
+  "summary": "Redteam Defender Judge pattern for verify",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "redteam_defender_judge_n1",
+      "data": {
+        "role": "RedTeam",
+        "label": "RedTeam"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "redteam_defender_judge_n2",
+      "data": {
+        "role": "Defender",
+        "label": "Defender"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "system",
+      "id": "redteam_defender_judge_n3",
+      "data": {
+        "role": "Judge",
+        "label": "Judge"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "redteam_defender_judge_e1",
+      "source": "redteam_defender_judge_n1",
+      "target": "redteam_defender_judge_n2",
+      "label": "redteam_defender_judge",
+      "data": {
+        "patternId": "redteam_defender_judge",
+        "topology": "debate_judge",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "redteam_defender_judge_e2",
+      "source": "redteam_defender_judge_n1",
+      "target": "redteam_defender_judge_n3",
+      "label": "redteam_defender_judge",
+      "data": {
+        "patternId": "redteam_defender_judge",
+        "topology": "debate_judge",
+        "messageForm": "structured_json",
+        "sync": "turn_based",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

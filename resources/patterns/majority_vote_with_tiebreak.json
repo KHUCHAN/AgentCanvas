@@ -1,0 +1,141 @@
+{
+  "id": "majority_vote_with_tiebreak",
+  "name": "Majority Vote Tiebreak",
+  "summary": "Majority Vote Tiebreak pattern for verify",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "majority_vote_with_tiebreak_n1",
+      "data": {
+        "role": "EvaluatorA",
+        "label": "EvaluatorA"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "majority_vote_with_tiebreak_n2",
+      "data": {
+        "role": "EvaluatorB",
+        "label": "EvaluatorB"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "majority_vote_with_tiebreak_n3",
+      "data": {
+        "role": "EvaluatorC",
+        "label": "EvaluatorC"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    },
+    {
+      "type": "system",
+      "id": "majority_vote_with_tiebreak_n4",
+      "data": {
+        "role": "Judge",
+        "label": "Judge"
+      },
+      "position": {
+        "x": 660,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "majority_vote_with_tiebreak_e1",
+      "source": "majority_vote_with_tiebreak_n1",
+      "target": "majority_vote_with_tiebreak_n2",
+      "label": "majority_vote_with_tiebreak",
+      "data": {
+        "patternId": "majority_vote_with_tiebreak",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "consensus_threshold",
+          "threshold": 0.6
+        },
+        "params": {
+          "intent": "verify"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "majority_vote_with_tiebreak_e2",
+      "source": "majority_vote_with_tiebreak_n1",
+      "target": "majority_vote_with_tiebreak_n3",
+      "label": "majority_vote_with_tiebreak",
+      "data": {
+        "patternId": "majority_vote_with_tiebreak",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "consensus_threshold",
+          "threshold": 0.6
+        },
+        "params": {
+          "intent": "verify"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "majority_vote_with_tiebreak_e3",
+      "source": "majority_vote_with_tiebreak_n1",
+      "target": "majority_vote_with_tiebreak_n4",
+      "label": "majority_vote_with_tiebreak",
+      "data": {
+        "patternId": "majority_vote_with_tiebreak",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "consensus_threshold",
+          "threshold": 0.6
+        },
+        "params": {
+          "intent": "verify"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

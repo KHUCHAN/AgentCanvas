@@ -1,0 +1,891 @@
+좋아. 아래는 **“3가지(① Tidy 레이아웃 + dagre, ② Skill Wizard + 템플릿 생성, ③ Codex AGENTS 체인 탐지)”를 MVP에 바로 붙여넣어 적용**할 수 있게 파일 단위로 정리한 거고, 추가로 **에이전트 이미지/소통 규칙 .md**, **MCP 연결 구상 .md**, **프로젝트 이름 추천**까지 한 번에 넣었어.
+
+---
+
+## 0) 먼저 설치할 의존성(권장)
+
+### webview-ui
+
+* `reactflow`
+* `dagre` (또는 `@dagrejs/dagre`)
+* `gray-matter`
+
+### extension
+
+* `fast-glob` (스캔)
+* `jszip` (pack)
+* `@iarna/toml` (Codex config.toml 파싱)
+
+---
+
+# 1) (추가 ①) n8n “Tidy up” 자동 레이아웃 + dagre 설정
+
+## 1.1 레이아웃 규칙(결정적인 UX)
+
+* **Agent 노드**: 가장 왼쪽 컬럼
+* **Rule 체인**: Agent 아래에 **orderIndex 순서대로 수직 스택**
+* **Skills**: 오른쪽 컬럼, scope( project/personal/shared )별로 섹션을 나눠 **그리드 배치**
+* **Notes**: 기본은 기존 위치 유지(없으면 중앙)
+
+> dagre는 “전체 자동 레이아웃(옵션)”로 제공하고, 기본 “Tidy”는 아래의 **결정론적 배치**로 가면 n8n처럼 예측 가능해져.
+
+---
+
+## 1.2 `webview-ui/src/canvas/layout/tidyLayout.ts`
+
+```ts
+import type { GraphSnapshot, GraphNode, NodeData, SkillNodeData, RuleDocNodeData, AgentNodeData } from "../../messaging/protocol";
+
+type Size = { w: number; h: number };
+
+const SIZE_BY_KIND: Record<string, Size> = {
+  agent: { w: 240, h: 90 },
+  ruleDoc: { w: 280, h: 80 },
+  skill: { w: 300, h: 100 },
+  note: { w: 260, h: 160 },
+  folder: { w: 220, h: 70 },
+};
+
+const X = {
+  agent: 80,
+  rule: 80,
+  skill: 520,
+  folder: 360,
+  note: 860,
+};
+
+const GAP = {
+  row: 26,
+  col: 26,
+  section: 60,
+};
+
+function kind(n: GraphNode<NodeData>) {
+  return n.data.kind;
+}
+
+function getSize(n: GraphNode<NodeData>): Size {
+  return SIZE_BY_KIND[kind(n)] ?? { w: 240, h: 80 };
+}
+
+function isEdgeKind(edges: GraphSnapshot["edges"], id: string, kind: string) {
+  return edges.some(e => e.id === id && e.data?.kind === kind);
+}
+
+export function tidyLayout(snapshot: GraphSnapshot): GraphSnapshot {
+  const nodes = snapshot.nodes.map(n => ({ ...n })); // copy
+  const edges = snapshot.edges;
+
+  const byId = new Map(nodes.map(n => [n.id, n] as const));
+
+  const agents = nodes.filter(n => n.data.kind === "agent");
+  const ruledocs = nodes.filter(n => n.data.kind === "ruleDoc");
+  const skills = nodes.filter(n => n.data.kind === "skill");
+  const folders = nodes.filter(n => n.data.kind === "folder");
+  const notes = nodes.filter(n => n.data.kind === "note");
+
+  // Helper: edges from source -> target of type "contains"
+  const containsTargets = (sourceId: string) =>
+    edges
+      .filter(e => e.source === sourceId && e.data?.kind === "contains")
+      .map(e => byId.get(e.target))
+      .filter(Boolean) as GraphNode<NodeData>[];
+
+  // 1) Place agents vertically
+  let cursorY = 80;
+  for (const a of agents) {
+    a.position = { x: X.agent, y: cursorY };
+    const sz = getSize(a);
+    cursorY += sz.h + GAP.section;
+  }
+
+  // 2) For each agent, place its RuleDocs as a vertical chain under it
+  for (const a of agents) {
+    const aSz = getSize(a);
+    const children = containsTargets(a.id);
+    const ruleChildren = children.filter(c => c.data.kind === "ruleDoc") as GraphNode<RuleDocNodeData>[];
+
+    ruleChildren.sort((r1, r2) => (r1.data.orderIndex ?? 0) - (r2.data.orderIndex ?? 0));
+
+    let y = a.position.y + aSz.h + GAP.row;
+    for (const r of ruleChildren) {
+      r.position = { x: X.rule, y };
+      y += getSize(r).h + GAP.row;
+    }
+
+    // 3) Place skills to the right, grouped by scope
+    const skillChildren = children.filter(c => c.data.kind === "skill") as GraphNode<SkillNodeData>[];
+
+    const groups: Record<string, GraphNode<SkillNodeData>[]> = {
+      project: [],
+      personal: [],
+      shared: [],
+      unknown: [],
+    };
+
+    for (const s of skillChildren) {
+      groups[s.data.scope ?? "unknown"].push(s);
+    }
+
+    const scopes: (keyof typeof groups)[] = ["project", "personal", "shared", "unknown"];
+    let skillY = a.position.y; // align section start near agent
+    const cols = 2;
+
+    for (const scope of scopes) {
+      const list = groups[scope];
+      if (!list.length) continue;
+
+      // keep group stable by name
+      list.sort((x, y) => x.data.name.localeCompare(y.data.name));
+
+      const headerSpace = 0; // if you later want "group header node", reserve height here
+      skillY += headerSpace;
+
+      for (let i = 0; i < list.length; i++) {
+        const s = list[i];
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const sSz = getSize(s);
+
+        s.position = {
+          x: X.skill + col * (sSz.w + GAP.col),
+          y: skillY + row * (sSz.h + GAP.row),
+        };
+      }
+
+      // advance skillY for next section
+      const rows = Math.ceil(list.length / cols);
+      const sampleSz = getSize(list[0]);
+      skillY += rows * (sampleSz.h + GAP.row) + GAP.section;
+    }
+  }
+
+  // 4) Place folders near skills column (simple stack)
+  let folderY = 80;
+  for (const f of folders) {
+    f.position = { x: X.folder, y: folderY };
+    folderY += getSize(f).h + GAP.row;
+  }
+
+  // 5) Notes: keep their position; if not set, place them to far-right
+  let noteY = 80;
+  for (const n of notes) {
+    if (!n.position || (n.position.x === 0 && n.position.y === 0)) {
+      n.position = { x: X.note, y: noteY };
+      noteY += getSize(n).h + GAP.row;
+    }
+  }
+
+  return { nodes, edges };
+}
+```
+
+---
+
+## 1.3 dagre 기반 “Auto” 레이아웃(옵션) `webview-ui/src/canvas/layout/dagreLayout.ts`
+
+```ts
+import dagre from "dagre";
+import type { GraphSnapshot, GraphNode, NodeData } from "../../messaging/protocol";
+
+const SIZE = {
+  agent: { w: 240, h: 90 },
+  ruleDoc: { w: 280, h: 80 },
+  skill: { w: 300, h: 100 },
+  note: { w: 260, h: 160 },
+  folder: { w: 220, h: 70 },
+};
+
+function sizeOf(n: GraphNode<NodeData>) {
+  return SIZE[n.data.kind] ?? { w: 240, h: 80 };
+}
+
+/**
+ * rankdir: LR => left-to-right 흐름
+ * nodesep/ranksep: n8n 느낌으로 조금 넓게
+ */
+export function dagreLayout(snapshot: GraphSnapshot): GraphSnapshot {
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({
+    rankdir: "LR",
+    nodesep: 60,
+    ranksep: 90,
+    marginx: 40,
+    marginy: 40,
+  });
+
+  for (const n of snapshot.nodes) {
+    const { w, h } = sizeOf(n);
+    g.setNode(n.id, { width: w, height: h });
+  }
+
+  // ruleDoc 체인 강제(있으면)
+  // overrides edge가 있으면 dagre가 체인 방향을 잡기 쉬움
+  for (const e of snapshot.edges) {
+    g.setEdge(e.source, e.target);
+  }
+
+  dagre.layout(g);
+
+  const nodes = snapshot.nodes.map(n => {
+    const p = g.node(n.id);
+    if (!p) return n;
+    return {
+      ...n,
+      position: {
+        x: p.x - (p.width / 2),
+        y: p.y - (p.height / 2),
+      },
+    };
+  });
+
+  return { nodes, edges: snapshot.edges };
+}
+```
+
+---
+
+## 1.4 GraphView에 Tidy 버튼 연결(요지)
+
+* Floating “Tidy” → `tidyLayout(state.graph)` 적용 후 store 업데이트
+* “Auto” 모드 버튼을 따로 두면 dagre로도 가능
+
+---
+
+# 2) (추가 ②) Skill Wizard UI + SKILL.md 템플릿 생성 로직
+
+Agent Skills 표준: 스킬은 `skill-name/` 폴더 + `SKILL.md`(YAML frontmatter + Markdown)이며 `name/description`이 필수. ([Agent Skills][1])
+Codex도 Agent Skills를 지원하며 `agents/openai.yaml`로 UI/의존/정책 메타를 추가할 수 있음. ([OpenAI Developers][2])
+
+---
+
+## 2.1 webview: Wizard Modal `webview-ui/src/panels/SkillWizardModal.tsx`
+
+```tsx
+import React, { useMemo, useState } from "react";
+import type { SkillScope } from "../messaging/protocol";
+
+const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function SkillWizardModal(props: {
+  open: boolean;
+  onClose: () => void;
+  defaultBaseDirUri: string;      // e.g. workspace/.github/skills
+  baseDirOptions: { label: string; uri: string }[];
+  onCreate: (args: {
+    baseDirUri: string;
+    name: string;
+    description: string;
+    scope: SkillScope;
+    generateOpenAiYaml: boolean;
+  }) => Promise<void>;
+}) {
+  const [baseDirUri, setBaseDirUri] = useState(props.defaultBaseDirUri);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [scope, setScope] = useState<SkillScope>("project");
+  const [generateOpenAiYaml, setGenerateOpenAiYaml] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const nameError = useMemo(() => {
+    if (!name) return "Required";
+    if (name.length > 64) return "Max 64 chars";
+    if (!NAME_RE.test(name)) return "Use lowercase letters, numbers, hyphens (no --, no leading/trailing -)";
+    return null;
+  }, [name]);
+
+  const descError = useMemo(() => {
+    if (!description) return "Required";
+    if (description.length > 1024) return "Max 1024 chars";
+    return null;
+  }, [description]);
+
+  if (!props.open) return null;
+
+  return (
+    <div className="modalOverlay">
+      <div className="modalCard">
+        <div className="modalHeader">
+          <div className="title">New Skill</div>
+          <button onClick={props.onClose} disabled={busy}>✕</button>
+        </div>
+
+        <div className="form">
+          <label>
+            Install location
+            <select value={baseDirUri} onChange={(e) => setBaseDirUri(e.target.value)} disabled={busy}>
+              {props.baseDirOptions.map(o => (
+                <option key={o.uri} value={o.uri}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Name (folder name)
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. api-conventions" disabled={busy}/>
+            {nameError && <div className="error">{nameError}</div>}
+          </label>
+
+          <label>
+            Description (when to use)
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe what it does AND when to use it." disabled={busy}/>
+            {descError && <div className="error">{descError}</div>}
+          </label>
+
+          <label>
+            Scope (badge)
+            <select value={scope} onChange={(e) => setScope(e.target.value as any)} disabled={busy}>
+              <option value="project">project</option>
+              <option value="personal">personal</option>
+              <option value="shared">shared</option>
+            </select>
+          </label>
+
+          <label className="checkboxRow">
+            <input type="checkbox" checked={generateOpenAiYaml} onChange={(e)=>setGenerateOpenAiYaml(e.target.checked)} disabled={busy}/>
+            Generate <code>agents/openai.yaml</code> (Codex metadata)
+          </label>
+
+          <div className="actions">
+            <button onClick={props.onClose} disabled={busy}>Cancel</button>
+            <button
+              disabled={busy || !!nameError || !!descError}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await props.onCreate({ baseDirUri, name, description, scope, generateOpenAiYaml });
+                  props.onClose();
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Create
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+## 2.2 webview → extension 메시지 호출(요지)
+
+Wizard submit 시 `CREATE_SKILL` 호출:
+
+```ts
+await bridge.request({
+  type: "CREATE_SKILL",
+  baseDirUri,
+  name,
+  description,
+  extraFrontmatter: {
+    metadata: { scope }, // 보존용
+    _agent_studio: { scopeBadge: scope, generateOpenAiYaml },
+  },
+});
+```
+
+---
+
+## 2.3 extension: 템플릿 생성 `extension/src/services/skillTemplate.ts`
+
+```ts
+export function renderSkillMd(args: {
+  name: string;
+  description: string;
+  extraFrontmatter?: Record<string, unknown>;
+}) {
+  // YAML frontmatter (Agent Skills spec) :contentReference[oaicite:2]{index=2}
+  const fm: any = {
+    name: args.name,
+    description: args.description,
+    ...args.extraFrontmatter,
+  };
+
+  // 아주 단순 YAML 출력(중첩이 필요하면 yaml lib 써도 됨)
+  const yamlLines: string[] = ["---"];
+  for (const [k, v] of Object.entries(fm)) {
+    yamlLines.push(`${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`);
+  }
+  yamlLines.push("---");
+
+  const body = `
+# ${args.name}
+
+## When to use
+- Use this skill when: **(fill in)**
+- Keywords/triggers: **(fill in)**
+
+## What you will produce
+- Output: **(files changed / commands / report format)**
+
+## Steps
+1) **Gather context** (files to read, commands allowed)
+2) **Plan** (short bullet plan)
+3) **Execute** (make edits / run commands)
+4) **Verify** (tests, checks)
+5) **Report** (what changed + why)
+
+## Examples
+- User: "..."
+  - You: "..."
+
+## Notes / Safety
+- If credentials are needed, never hardcode; request env vars or secure store.
+`;
+
+  return `${yamlLines.join("\n")}\n${body.trim()}\n`;
+}
+```
+
+---
+
+## 2.4 extension: CREATE_SKILL 핸들러 `extension/src/services/createSkill.ts`
+
+```ts
+import * as vscode from "vscode";
+import * as path from "path";
+import { renderSkillMd } from "./skillTemplate";
+
+export async function createSkill(params: {
+  baseDirUri: string;
+  name: string;
+  description: string;
+  extraFrontmatter?: Record<string, unknown>;
+  generateOpenAiYaml?: boolean;
+}) {
+  const base = vscode.Uri.parse(params.baseDirUri);
+  const skillDir = vscode.Uri.joinPath(base, params.name);
+  const skillMd = vscode.Uri.joinPath(skillDir, "SKILL.md");
+
+  await vscode.workspace.fs.createDirectory(skillDir);
+
+  const content = renderSkillMd({
+    name: params.name,
+    description: params.description,
+    extraFrontmatter: params.extraFrontmatter,
+  });
+
+  await vscode.workspace.fs.writeFile(skillMd, Buffer.from(content, "utf8"));
+
+  if (params.generateOpenAiYaml) {
+    // Codex optional metadata file :contentReference[oaicite:3]{index=3}
+    const agentsDir = vscode.Uri.joinPath(skillDir, "agents");
+    await vscode.workspace.fs.createDirectory(agentsDir);
+    const openaiYaml = vscode.Uri.joinPath(agentsDir, "openai.yaml");
+
+    const yaml = `# Optional Codex metadata for this skill
+# See: https://developers.openai.com/codex/skills/
+disable-model-invocation: false
+# allowed-tools: ["Read", "Grep"]  # optional
+`;
+    await vscode.workspace.fs.writeFile(openaiYaml, Buffer.from(yaml, "utf8"));
+  }
+
+  return { skillDirUri: skillDir.toString(), skillMdUri: skillMd.toString() };
+}
+```
+
+---
+
+# 3) (추가 ③) Codex AGENTS.md 체인 탐지(정확 버전)
+
+Codex 가이드 핵심:
+
+* 각 디렉터리에서 **`AGENTS.override.md`가 있으면 `AGENTS.md`는 무시**됨 ([OpenAI Developers][3])
+* 검색은 **repo root → 현재 디렉터리까지**, 더 깊이 내려가며 탐색하지 않음 ([OpenAI Developers][3])
+* fallback 파일명 리스트(`project_doc_fallback_filenames`)도 설정 가능 ([OpenAI Developers][3])
+* 프로젝트 루트는 기본 `.git` marker로 위로 탐색(설정으로 marker 변경 가능) ([OpenAI Developers][4])
+
+---
+
+## 3.1 `extension/src/providers/codex/codexAgentsDiscovery.ts`
+
+```ts
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
+import * as vscode from "vscode";
+import * as toml from "@iarna/toml";
+
+export type CodexAgentsDoc = {
+  uri: string;
+  exists: boolean;
+  scope: "global" | "project";
+  docType: "codex-agents" | "codex-agents-override";
+  orderIndex: number;
+};
+
+type CodexConfig = {
+  project_root_markers?: string[];
+  project_doc_fallback_filenames?: string[];
+  project_doc_max_bytes?: number;
+};
+
+async function fileExists(p: string) {
+  try { await fs.stat(p); return true; } catch { return false; }
+}
+
+async function readTomlIfExists(p: string): Promise<any | null> {
+  if (!(await fileExists(p))) return null;
+  const raw = await fs.readFile(p, "utf8");
+  return toml.parse(raw);
+}
+
+function getCodexHome() {
+  return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+}
+
+/** Walk up from start until you find a dir containing any marker; default marker .git */
+async function findProjectRoot(startDir: string, markers: string[]) {
+  let cur = path.resolve(startDir);
+  while (true) {
+    for (const m of markers) {
+      if (await fileExists(path.join(cur, m))) return cur;
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) return startDir; // fallback: treat start as root
+    cur = parent;
+  }
+}
+
+function pathSegmentsBetween(root: string, leaf: string) {
+  const rel = path.relative(root, leaf);
+  const segs = rel ? rel.split(path.sep) : [];
+  const dirs = [root];
+  let acc = root;
+  for (const s of segs) {
+    acc = path.join(acc, s);
+    dirs.push(acc);
+  }
+  return dirs;
+}
+
+async function chooseAgentsFile(dir: string, fallbacks: string[]) {
+  const candidates = ["AGENTS.override.md", "AGENTS.md", ...fallbacks]; // override > base > fallbacks :contentReference[oaicite:8]{index=8}
+  for (const f of candidates) {
+    const p = path.join(dir, f);
+    if (await fileExists(p)) return { file: f, fullPath: p };
+  }
+  return null;
+}
+
+export async function discoverCodexAgentsChain(cwdFsPath: string): Promise<CodexAgentsDoc[]> {
+  const codexHome = getCodexHome();
+
+  // user config (optional)
+  const userConfigPath = path.join(codexHome, "config.toml");
+  const userCfgRaw = await readTomlIfExists(userConfigPath);
+  const userCfg: CodexConfig = userCfgRaw ?? {};
+
+  const markers = (userCfg.project_root_markers && userCfg.project_root_markers.length)
+    ? userCfg.project_root_markers
+    : [".git"]; // default root marker :contentReference[oaicite:9]{index=9}
+
+  const fallbacks = userCfg.project_doc_fallback_filenames ?? []; // from AGENTS.md guide :contentReference[oaicite:10]{index=10}
+
+  const projectRoot = await findProjectRoot(cwdFsPath, markers);
+  const dirs = pathSegmentsBetween(projectRoot, cwdFsPath);
+
+  const docs: CodexAgentsDoc[] = [];
+
+  // 1) Global: ~/.codex/AGENTS.override.md preferred, else ~/.codex/AGENTS.md
+  const globalOverride = path.join(codexHome, "AGENTS.override.md");
+  const globalBase = path.join(codexHome, "AGENTS.md");
+  if (await fileExists(globalOverride)) {
+    docs.push({ uri: vscode.Uri.file(globalOverride).toString(), exists: true, scope: "global", docType: "codex-agents-override", orderIndex: 0 });
+  } else if (await fileExists(globalBase)) {
+    docs.push({ uri: vscode.Uri.file(globalBase).toString(), exists: true, scope: "global", docType: "codex-agents", orderIndex: 0 });
+  }
+
+  // 2) Project chain: root -> leaf, pick one per dir: override > base > fallbacks :contentReference[oaicite:11]{index=11}
+  let idx = 1;
+  for (const d of dirs) {
+    const chosen = await chooseAgentsFile(d, fallbacks);
+    if (!chosen) continue;
+
+    const isOverride = chosen.file === "AGENTS.override.md";
+    docs.push({
+      uri: vscode.Uri.file(chosen.fullPath).toString(),
+      exists: true,
+      scope: "project",
+      docType: isOverride ? "codex-agents-override" : "codex-agents",
+      orderIndex: idx++,
+    });
+  }
+
+  return docs;
+}
+```
+
+> 참고: Codex는 이 문서들을 root-to-leaf 순서로 conversation 상단에 “AGENTS.md instructions for <directory>” 헤더와 함께 주입한다고 설명돼 있어(나중에 “Preview” 기능 만들 때 그대로 활용 가능). ([OpenAI Developers][5])
+
+---
+
+# 4) Codex에게 줄 “에이전트 이미지/소통 규칙” .md 파일
+
+아래 내용을 그대로 `AGENT_COMMS.md`로 저장해서, Codex/Claude/Gemini 등에게 공통 규칙으로 쓰면 돼.
+
+```md
+# AGENT_COMMS.md
+Agent Studio - Image Handling & Communication Protocol
+
+## Goals
+- Keep collaboration predictable: same structure, same signals, minimal confusion.
+- Make outputs machine- and human-friendly: consistent sections, stable keywords.
+- Avoid silent assumptions: always surface unknowns and constraints early.
+
+---
+
+## Message Format (default)
+Every agent message SHOULD follow this structure unless unnecessary:
+
+1) **Intent**
+- What you are trying to do in one sentence.
+
+2) **Assumptions / Inputs**
+- Bullet list of assumptions.
+- List required files/paths/URLs/images.
+
+3) **Plan**
+- 3–7 bullets, ordered.
+
+4) **Actions / Artifacts**
+- If you created/modified files: list file paths and what changed.
+- If you ran checks: list commands and results.
+
+5) **Open Questions (if any)**
+- Ask at most 1–3 concrete questions. Prefer defaults when safe.
+
+---
+
+## Communication Between Agents
+### Roles (recommended)
+- **Planner**: produces plan + risk/unknowns; does not implement.
+- **Builder**: implements; writes files; small incremental commits.
+- **Reviewer**: checks correctness, edge cases, security; proposes fixes.
+- **UX**: checks n8n-style interaction fidelity; keyboard & layout.
+
+### Handoff Protocol
+When handing off work:
+- Provide: `Context`, `Goal`, `Definition of Done`, `Files touched`, `Next steps`.
+- Use this exact header block:
+
+```
+
+HANDOFF
+Context:
+Goal:
+DoD:
+Files:
+Next:
+
+```
+
+---
+
+## Image Handling Rules
+### When to request images
+- If UI/layout, icons, spacing, or visual bugs are discussed → request screenshot.
+- If a diagram is needed → request image or propose generating one.
+
+### How to use images with Codex
+- For Codex CLI, attach images using `--image` / `-i` with file paths.  
+  Example: `codex -i ./screenshots/ui.png "Explain what's wrong with this layout."`
+- Keep image filenames descriptive: `mcp-panel-empty-state.png`.
+
+(Reference: Codex CLI supports `--image` / `-i` for attaching one or more images.) 
+
+### How to describe images
+- Do NOT guess small text from images; ask for zoomed/clearer shots if needed.
+- Summarize visuals using:
+  - Layout: columns/rows/panels
+  - Interaction: hover states, focus, selection
+  - Errors: console/log snippets (copy text separately when possible)
+
+### Privacy & Safety
+- Do not store or commit sensitive screenshots (tokens, emails, customer data).
+- If sensitive info appears, ask for redacted image.
+
+---
+
+## Tone & Style
+- Be direct and technical.
+- Avoid long narratives.
+- Prefer bullet lists and checklists.
+- Never hide failures: report what didn’t work and why.
+
+---
+
+## “Definition of Done” templates
+### For UI tasks
+- [ ] Canvas opens without errors
+- [ ] Tidy layout produces stable arrangement
+- [ ] Keyboard shortcuts work (Tab, +/-, 0, 1, Space+drag)
+- [ ] Inspector shows correct info for each node type
+- [ ] No hardcoded colors; respects VS Code theme variables
+
+### For skills tasks
+- [ ] SKILL.md passes validation (name/description)
+- [ ] Folder name matches frontmatter name
+- [ ] Export/Import pack works with conflicts handled
+```
+
+> Codex에서 이미지 첨부 플래그는 CLI 레퍼런스에 문서화돼 있어. ([OpenAI Developers][6])
+
+---
+
+# 5) MCP 연결 구상(.md)
+
+Codex는 MCP 서버를 CLI/IDE 확장에서 지원하고, 설정은 `config.toml`의 `[mcp_servers.<name>]`로 관리 가능(또는 `codex mcp` CLI로 추가/관리). ([OpenAI Developers][7])
+VS Code는 workspace 단위로 `.vscode/mcp.json`에 MCP 서버를 저장(팀 공유 가능)하고, 로컬 서버는 임의 코드 실행 위험이 있어 “신뢰(trust)”를 강조함. ([Visual Studio Code][8])
+MCP 스펙은 강력한 도구 접근을 제공하므로 보안/신뢰 고려가 필수라고 명시돼 있음. ([Model Context Protocol][9])
+
+아래를 `MCP_PLAN.md`로 저장:
+
+```md
+# MCP_PLAN.md
+Agent Studio - MCP Integration Plan
+
+## Why MCP here?
+We want a unified UI to:
+- Add/manage MCP servers for Codex and VS Code
+- Share MCP configs with teams
+- Provide safe defaults (tool allowlist, timeouts)
+- Keep credentials out of config (env vars only)
+
+---
+
+## Target Integrations
+### 1) Codex MCP
+Codex supports MCP in both CLI and IDE extension. Config is in `~/.codex/config.toml` or project `.codex/config.toml` (trusted projects only).
+Server tables live under: `[mcp_servers.<server-name>]`.
+
+Supported:
+- STDIO servers (local process)
+- Streamable HTTP servers
+- Bearer token auth / OAuth (`codex mcp login <server-name>`)
+
+### 2) VS Code MCP
+VS Code stores workspace MCP servers in `.vscode/mcp.json` (commit to share with team).
+VS Code supports:
+- stdio
+- http
+- (legacy) sse
+It also prompts for server trust, because local servers can run arbitrary code.
+
+---
+
+## Agent Studio UX (what we build)
+### A) MCP Panel (new right-panel tab or settings page)
+Tabs:
+- Codex MCP
+- VS Code MCP
+
+Common controls:
+- Add server (wizard)
+- Enable/disable
+- Tool allowlist/denylist
+- Start/restart hints (for VS Code)
+- Credential inputs via env var names only (never store secrets)
+
+### B) “One-click presets”
+- OpenAI Docs MCP (HTTP): `https://developers.openai.com/mcp`
+- Context7 (STDIO): `npx -y @upstash/context7-mcp` (example)
+- (Optional) Playwright / Chrome DevTools MCP
+
+---
+
+## Config Writers
+### 1) Codex config.toml writer
+Write to:
+- user: `~/.codex/config.toml`
+- project: `.codex/config.toml` (only if workspace is trusted, otherwise warn)
+
+Schema:
+[mcp_servers.<name>]
+- STDIO: command, args, env, env_vars, cwd
+- HTTP: url, bearer_token_env_var, http_headers, env_http_headers
+- common: startup_timeout_sec, tool_timeout_sec, enabled, required, enabled_tools, disabled_tools
+Optional:
+- top-level mcp_oauth_callback_port
+
+### 2) VS Code mcp.json writer
+Write to:
+- workspace: `.vscode/mcp.json`
+Structure:
+{
+  "servers": {
+    "<name>": {
+      "type": "http" | "stdio",
+      "url": "...",
+      "command": "...",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+
+---
+
+## Security Defaults (must)
+- Default to `enabled_tools` allowlist for any powerful server.
+- If server is local stdio:
+  - show warning: “runs arbitrary code”
+  - require explicit user confirmation in our UI
+- Never store tokens; store only ENV VAR NAMES
+- Provide “review config diff” before writing
+
+---
+
+## Roadmap: MCP-aware graph nodes (future)
+- Render MCP servers as nodes in canvas:
+  - Agent -> MCP server edges
+  - MCP server -> Tools count badge
+- Add “health check” action:
+  - For Codex: rely on `codex mcp` / config presence
+  - For VS Code: rely on MCP server status in VS Code UI (manual for MVP)
+```
+
+---
+
+# 6) 프로젝트 이름 추천
+
+n8n 느낌(Flow), Agent/Skill 관리 목적, 확장성까지 고려하면 아래가 깔끔해.
+
+### 후보 10개
+
+1. **AgentCanvas** (추천 1순위: 목적이 한 단어로 설명됨)
+2. SkillCanvas
+3. RuleGraph
+4. AgentStudio (너가 문서에서 이미 쓴 컨셉)
+5. SkillFlow
+6. FlowAgents
+7. CanvasOps
+8. AgentWorkbench
+9. SkillForge
+10. ClawStudio (OpenClaw 연상되지만 특정 제품에 종속 느낌)
+
+**내 추천:** `AgentCanvas`
+
+* 확장(규칙, 스킬, MCP, 팩, 시각화)이 다 들어맞고
+* VS Code 확장 이름으로도 자연스러움
+
+---
+
+원하면 다음 턴에 **“MCP Panel 실제 구현 스켈레톤(코덱스/VS Code 각각 config writer + diff preview + wizard UI)”**까지 코드로 바로 써줄게.
+
+[1]: https://agentskills.io/specification?utm_source=chatgpt.com "Specification"
+[2]: https://developers.openai.com/codex/skills/?utm_source=chatgpt.com "Agent Skills"
+[3]: https://developers.openai.com/codex/guides/agents-md/?utm_source=chatgpt.com "Custom instructions with AGENTS.md"
+[4]: https://developers.openai.com/codex/config-advanced/?utm_source=chatgpt.com "Advanced Configuration"
+[5]: https://developers.openai.com/cookbook/examples/gpt-5/codex_prompting_guide/?utm_source=chatgpt.com "Codex Prompting Guide"
+[6]: https://developers.openai.com/codex/cli/reference/?utm_source=chatgpt.com "Command line options"
+[7]: https://developers.openai.com/codex/mcp/ "Model Context Protocol"
+[8]: https://code.visualstudio.com/docs/copilot/customization/mcp-servers "Use MCP servers in VS Code"
+[9]: https://modelcontextprotocol.io/specification/2025-11-25?utm_source=chatgpt.com "Specification"

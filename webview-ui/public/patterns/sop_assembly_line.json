@@ -1,0 +1,147 @@
+{
+  "id": "sop_assembly_line",
+  "name": "SOP Assembly Line",
+  "summary": "SOP Assembly Line pattern for solve",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "sop_assembly_line_n1",
+      "data": {
+        "role": "PM",
+        "label": "PM"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "sop_assembly_line_n2",
+      "data": {
+        "role": "Architect",
+        "label": "Architect"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "sop_assembly_line_n3",
+      "data": {
+        "role": "Engineer",
+        "label": "Engineer"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "sop_assembly_line_n4",
+      "data": {
+        "role": "QA",
+        "label": "QA"
+      },
+      "position": {
+        "x": 660,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "sop_assembly_line_e1",
+      "source": "sop_assembly_line_n1",
+      "target": "sop_assembly_line_n2",
+      "label": "sop_assembly_line",
+      "data": {
+        "patternId": "sop_assembly_line",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "quality_gate",
+          "metric": "milestone_score",
+          "op": ">=",
+          "value": 0.8
+        },
+        "params": {
+          "intent": "solve"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "sop_assembly_line_e2",
+      "source": "sop_assembly_line_n1",
+      "target": "sop_assembly_line_n3",
+      "label": "sop_assembly_line",
+      "data": {
+        "patternId": "sop_assembly_line",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "quality_gate",
+          "metric": "milestone_score",
+          "op": ">=",
+          "value": 0.8
+        },
+        "params": {
+          "intent": "solve"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "sop_assembly_line_e3",
+      "source": "sop_assembly_line_n1",
+      "target": "sop_assembly_line_n4",
+      "label": "sop_assembly_line",
+      "data": {
+        "patternId": "sop_assembly_line",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "quality_gate",
+          "metric": "milestone_score",
+          "op": ">=",
+          "value": 0.8
+        },
+        "params": {
+          "intent": "solve"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

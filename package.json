@@ -1,0 +1,92 @@
+{
+  "name": "agent-canvas",
+  "displayName": "AgentCanvas",
+  "description": "n8n-style canvas for discovering, editing, and sharing agent skills and rule docs.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "icon": "media/agentcanvas_marketplace.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:agentCanvas.open"
+  ],
+  "main": "./extension/dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentCanvas.open",
+        "title": "AgentCanvas: Open"
+      },
+      {
+        "command": "agentCanvas.refresh",
+        "title": "AgentCanvas: Refresh"
+      }
+    ],
+    "configuration": {
+      "title": "AgentCanvas",
+      "properties": {
+        "agentCanvas.webviewDevServerUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Dev server URL for webview development (e.g. http://localhost:5173). Leave empty to use bundled dist assets."
+        },
+        "agentCanvas.codexProjectFallbackFileName": {
+          "type": "string",
+          "default": "",
+          "description": "Optional fallback filename for Codex project guidance discovery when AGENTS files do not exist."
+        },
+        "agentCanvas.promptBackend": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "claude-code",
+            "gemini-cli",
+            "codex-cli",
+            "aider",
+            "custom"
+          ],
+          "description": "Default AI CLI backend for generating agent teams from prompt."
+        },
+        "agentCanvas.customCliCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Custom CLI command for prompt-based agent generation."
+        },
+        "agentCanvas.customCliArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional arguments passed to custom CLI backend."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "npm run build:webview && npm run build:extension",
+    "build:extension": "tsc -p extension/tsconfig.json",
+    "watch:extension": "tsc -p extension/tsconfig.json -w",
+    "build:webview": "npm --prefix webview-ui run build",
+    "typecheck:webview": "npm --prefix webview-ui run typecheck",
+    "check": "npm run build && npm run typecheck:webview",
+    "test:integration": "npm run check && node scripts/integration-tests.cjs",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "gray-matter": "^4.0.3",
+    "jszip": "^3.10.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.7.3"
+  }
+}

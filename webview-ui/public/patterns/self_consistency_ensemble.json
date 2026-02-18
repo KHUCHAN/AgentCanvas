@@ -1,0 +1,144 @@
+{
+  "id": "self_consistency_ensemble",
+  "name": "Self Consistency Ensemble",
+  "summary": "Self Consistency Ensemble pattern for verify",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "self_consistency_ensemble_n1",
+      "data": {
+        "role": "DraftorA",
+        "label": "DraftorA"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "self_consistency_ensemble_n2",
+      "data": {
+        "role": "DraftorB",
+        "label": "DraftorB"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "self_consistency_ensemble_n3",
+      "data": {
+        "role": "DraftorC",
+        "label": "DraftorC"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    },
+    {
+      "type": "system",
+      "id": "self_consistency_ensemble_n4",
+      "data": {
+        "role": "Aggregator",
+        "label": "Aggregator"
+      },
+      "position": {
+        "x": 660,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "self_consistency_ensemble_e1",
+      "source": "self_consistency_ensemble_n1",
+      "target": "self_consistency_ensemble_n2",
+      "label": "self_consistency_ensemble",
+      "data": {
+        "patternId": "self_consistency_ensemble",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "self_consistency_ensemble_e2",
+      "source": "self_consistency_ensemble_n1",
+      "target": "self_consistency_ensemble_n3",
+      "label": "self_consistency_ensemble",
+      "data": {
+        "patternId": "self_consistency_ensemble",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "self_consistency_ensemble_e3",
+      "source": "self_consistency_ensemble_n1",
+      "target": "self_consistency_ensemble_n4",
+      "label": "self_consistency_ensemble",
+      "data": {
+        "patternId": "self_consistency_ensemble",
+        "topology": "broadcast",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "verify",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

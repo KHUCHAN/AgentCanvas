@@ -1,0 +1,105 @@
+{
+  "id": "memory_sync_daily_summary",
+  "name": "Memory Sync Daily Summary",
+  "summary": "Memory Sync Daily Summary pattern for align",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "memory_sync_daily_summary_n1",
+      "data": {
+        "role": "AgentA",
+        "label": "AgentA"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "memory_sync_daily_summary_n2",
+      "data": {
+        "role": "AgentB",
+        "label": "AgentB"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "system",
+      "id": "memory_sync_daily_summary_n3",
+      "data": {
+        "role": "Curator",
+        "label": "Curator"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "memory_sync_daily_summary_e1",
+      "source": "memory_sync_daily_summary_n1",
+      "target": "memory_sync_daily_summary_n2",
+      "label": "memory_sync_daily_summary",
+      "data": {
+        "patternId": "memory_sync_daily_summary",
+        "topology": "blackboard",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 300000
+        },
+        "params": {
+          "intent": "align"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "memory_sync_daily_summary_e2",
+      "source": "memory_sync_daily_summary_n1",
+      "target": "memory_sync_daily_summary_n3",
+      "label": "memory_sync_daily_summary",
+      "data": {
+        "patternId": "memory_sync_daily_summary",
+        "topology": "blackboard",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 300000
+        },
+        "params": {
+          "intent": "align"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "id": "blackboard_shared_state",
+  "name": "Blackboard Shared State",
+  "summary": "Blackboard Shared State pattern for explore",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "blackboard_shared_state_n1",
+      "data": {
+        "role": "Analyst",
+        "label": "Analyst"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "blackboard_shared_state_n2",
+      "data": {
+        "role": "Planner",
+        "label": "Planner"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "system",
+      "id": "blackboard_shared_state_n3",
+      "data": {
+        "role": "Blackboard",
+        "label": "Blackboard"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "blackboard_shared_state_e1",
+      "source": "blackboard_shared_state_n1",
+      "target": "blackboard_shared_state_n2",
+      "label": "blackboard_shared_state",
+      "data": {
+        "patternId": "blackboard_shared_state",
+        "topology": "blackboard",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 600000
+        },
+        "params": {
+          "intent": "explore"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "blackboard_shared_state_e2",
+      "source": "blackboard_shared_state_n1",
+      "target": "blackboard_shared_state_n3",
+      "label": "blackboard_shared_state",
+      "data": {
+        "patternId": "blackboard_shared_state",
+        "topology": "blackboard",
+        "messageForm": "structured_json",
+        "sync": "async",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 600000
+        },
+        "params": {
+          "intent": "explore"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

@@ -1,0 +1,144 @@
+{
+  "id": "plan_execute_observe_reflect",
+  "name": "Plan Execute Observe Reflect",
+  "summary": "Plan Execute Observe Reflect pattern for solve",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "plan_execute_observe_reflect_n1",
+      "data": {
+        "role": "Planner",
+        "label": "Planner"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "plan_execute_observe_reflect_n2",
+      "data": {
+        "role": "Executor",
+        "label": "Executor"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "plan_execute_observe_reflect_n3",
+      "data": {
+        "role": "Observer",
+        "label": "Observer"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    },
+    {
+      "type": "agent",
+      "id": "plan_execute_observe_reflect_n4",
+      "data": {
+        "role": "Reflector",
+        "label": "Reflector"
+      },
+      "position": {
+        "x": 660,
+        "y": 130
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "plan_execute_observe_reflect_e1",
+      "source": "plan_execute_observe_reflect_n1",
+      "target": "plan_execute_observe_reflect_n2",
+      "label": "plan_execute_observe_reflect",
+      "data": {
+        "patternId": "plan_execute_observe_reflect",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "plan_execute_observe_reflect_e2",
+      "source": "plan_execute_observe_reflect_n1",
+      "target": "plan_execute_observe_reflect_n3",
+      "label": "plan_execute_observe_reflect",
+      "data": {
+        "patternId": "plan_execute_observe_reflect",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "plan_execute_observe_reflect_e3",
+      "source": "plan_execute_observe_reflect_n1",
+      "target": "plan_execute_observe_reflect_n4",
+      "label": "plan_execute_observe_reflect",
+      "data": {
+        "patternId": "plan_execute_observe_reflect",
+        "topology": "pipeline",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 2
+        },
+        "params": {
+          "intent": "solve",
+          "rounds": 2
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

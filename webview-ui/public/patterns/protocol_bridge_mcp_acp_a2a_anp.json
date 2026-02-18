@@ -1,0 +1,107 @@
+{
+  "id": "protocol_bridge_mcp_acp_a2a_anp",
+  "name": "Protocol Bridge",
+  "summary": "Protocol Bridge pattern for align",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "protocol_bridge_mcp_acp_a2a_anp_n1",
+      "data": {
+        "role": "LocalAgent",
+        "label": "LocalAgent"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "system",
+      "id": "protocol_bridge_mcp_acp_a2a_anp_n2",
+      "data": {
+        "role": "Bridge",
+        "label": "Bridge"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "system",
+      "id": "protocol_bridge_mcp_acp_a2a_anp_n3",
+      "data": {
+        "role": "ExternalProtocol",
+        "label": "ExternalProtocol"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "protocol_bridge_mcp_acp_a2a_anp_e1",
+      "source": "protocol_bridge_mcp_acp_a2a_anp_n1",
+      "target": "protocol_bridge_mcp_acp_a2a_anp_n2",
+      "label": "protocol_bridge_mcp_acp_a2a_anp",
+      "data": {
+        "patternId": "protocol_bridge_mcp_acp_a2a_anp",
+        "topology": "broker",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 1
+        },
+        "params": {
+          "intent": "align",
+          "rounds": 1
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "protocol_bridge_mcp_acp_a2a_anp_e2",
+      "source": "protocol_bridge_mcp_acp_a2a_anp_n1",
+      "target": "protocol_bridge_mcp_acp_a2a_anp_n3",
+      "label": "protocol_bridge_mcp_acp_a2a_anp",
+      "data": {
+        "patternId": "protocol_bridge_mcp_acp_a2a_anp",
+        "topology": "broker",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "max_rounds",
+          "rounds": 1
+        },
+        "params": {
+          "intent": "align",
+          "rounds": 1
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}

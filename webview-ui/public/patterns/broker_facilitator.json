@@ -1,0 +1,105 @@
+{
+  "id": "broker_facilitator",
+  "name": "Broker Facilitator",
+  "summary": "Broker Facilitator pattern for solve",
+  "nodes": [
+    {
+      "type": "agent",
+      "id": "broker_facilitator_n1",
+      "data": {
+        "role": "Requester",
+        "label": "Requester"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "system",
+      "id": "broker_facilitator_n2",
+      "data": {
+        "role": "Broker",
+        "label": "Broker"
+      },
+      "position": {
+        "x": 220,
+        "y": 130
+      }
+    },
+    {
+      "type": "agent",
+      "id": "broker_facilitator_n3",
+      "data": {
+        "role": "Provider",
+        "label": "Provider"
+      },
+      "position": {
+        "x": 440,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "interaction",
+      "id": "broker_facilitator_e1",
+      "source": "broker_facilitator_n1",
+      "target": "broker_facilitator_n2",
+      "label": "broker_facilitator",
+      "data": {
+        "patternId": "broker_facilitator",
+        "topology": "broker",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 120000
+        },
+        "params": {
+          "intent": "solve"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    },
+    {
+      "type": "interaction",
+      "id": "broker_facilitator_e2",
+      "source": "broker_facilitator_n1",
+      "target": "broker_facilitator_n3",
+      "label": "broker_facilitator",
+      "data": {
+        "patternId": "broker_facilitator",
+        "topology": "broker",
+        "messageForm": "structured_json",
+        "sync": "req_res",
+        "termination": {
+          "type": "timeout_ms",
+          "ms": 120000
+        },
+        "params": {
+          "intent": "solve"
+        },
+        "observability": {
+          "logs": true,
+          "traces": false
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "kind": "paper",
+      "ref": "survey-2025-multi-agent",
+      "note": "Pattern family reference"
+    },
+    {
+      "kind": "spec",
+      "ref": "agent communication.md",
+      "note": "Product mapping spec"
+    }
+  ]
+}
