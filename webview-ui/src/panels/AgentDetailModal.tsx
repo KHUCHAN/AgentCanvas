@@ -79,6 +79,7 @@ export default function AgentDetailModal({
   const [delegateIds, setDelegateIds] = useState<string[]>([]);
   const [runtimeMode, setRuntimeMode] = useState<"default" | "cli" | "openclaw">("default");
   const [runtimeBackendId, setRuntimeBackendId] = useState<CliBackendId>("auto");
+  const [runtimeCwdMode, setRuntimeCwdMode] = useState<"workspace" | "agentHome">("workspace");
   const [openClawGateway, setOpenClawGateway] = useState("ws://127.0.0.1:18789");
   const [openClawAgentKey, setOpenClawAgentKey] = useState("");
 
@@ -138,11 +139,15 @@ export default function AgentDetailModal({
     if (!agentProfile.runtime) {
       setRuntimeMode("default");
       setRuntimeBackendId("auto");
+      setRuntimeCwdMode(agentProfile.isOrchestrator ? "workspace" : "agentHome");
       setOpenClawGateway("ws://127.0.0.1:18789");
       setOpenClawAgentKey("");
     } else if (agentProfile.runtime.kind === "cli") {
       setRuntimeMode("cli");
       setRuntimeBackendId(agentProfile.runtime.backendId);
+      setRuntimeCwdMode(
+        agentProfile.runtime.cwdMode ?? (agentProfile.isOrchestrator ? "workspace" : "agentHome")
+      );
     } else {
       setRuntimeMode("openclaw");
       setOpenClawGateway(agentProfile.runtime.gatewayUrl ?? "ws://127.0.0.1:18789");
@@ -203,7 +208,7 @@ export default function AgentDetailModal({
       onSetRuntime(agentId, {
         kind: "cli",
         backendId: runtimeBackendId,
-        cwdMode: "workspace"
+        cwdMode: runtimeCwdMode
       });
     } else {
       onSetRuntime(agentId, {
@@ -345,20 +350,32 @@ export default function AgentDetailModal({
                 </div>
 
                 {runtimeMode === "cli" && (
-                  <div className="inspector-field">
-                    <label>CLI backend</label>
-                    <select
-                      value={runtimeBackendId}
-                      onChange={(event) => setRuntimeBackendId(event.target.value as CliBackendId)}
-                    >
-                      <option value="auto">auto</option>
-                      <option value="claude-code">claude-code</option>
-                      <option value="gemini-cli">gemini-cli</option>
-                      <option value="codex-cli">codex-cli</option>
-                      <option value="aider">aider</option>
-                      <option value="custom">custom</option>
-                    </select>
-                  </div>
+                  <>
+                    <div className="inspector-field">
+                      <label>CLI backend</label>
+                      <select
+                        value={runtimeBackendId}
+                        onChange={(event) => setRuntimeBackendId(event.target.value as CliBackendId)}
+                      >
+                        <option value="auto">auto</option>
+                        <option value="claude-code">claude-code</option>
+                        <option value="gemini-cli">gemini-cli</option>
+                        <option value="codex-cli">codex-cli</option>
+                        <option value="aider">aider</option>
+                        <option value="custom">custom</option>
+                      </select>
+                    </div>
+                    <div className="inspector-field">
+                      <label>CLI working directory</label>
+                      <select
+                        value={runtimeCwdMode}
+                        onChange={(event) => setRuntimeCwdMode(event.target.value as "workspace" | "agentHome")}
+                      >
+                        <option value="workspace">workspace root</option>
+                        <option value="agentHome">agent home (sandbox for worker runs)</option>
+                      </select>
+                    </div>
+                  </>
                 )}
 
                 {runtimeMode === "openclaw" && (

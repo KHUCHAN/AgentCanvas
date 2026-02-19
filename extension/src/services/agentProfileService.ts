@@ -110,6 +110,7 @@ export async function deleteAgentProfile(workspaceRoot: string, agentId: string)
 export async function createCustomAgentProfile(input: CreateAgentInput): Promise<AgentProfile> {
   const baseId = slugify(input.name);
   const role = input.role;
+  const isOrchestrator = input.isOrchestrator ?? role === "orchestrator";
   const profile: AgentProfile = {
     id: `custom:${baseId}`,
     name: input.name.trim(),
@@ -120,16 +121,16 @@ export async function createCustomAgentProfile(input: CreateAgentInput): Promise
     roleLabel: input.roleLabel?.trim() || undefined,
     description: input.description?.trim() || undefined,
     systemPrompt: input.systemPrompt?.trim() || undefined,
-    isOrchestrator: input.isOrchestrator ?? role === "orchestrator",
+    isOrchestrator,
     delegatesTo: [],
     assignedSkillIds: [],
     assignedMcpServerIds: [],
     runtime: {
       kind: "cli",
       backendId: "auto",
-      cwdMode: "workspace"
+      cwdMode: isOrchestrator ? "workspace" : "agentHome"
     },
-    avatar: input.isOrchestrator || role === "orchestrator" ? "🎯" : undefined
+    avatar: isOrchestrator ? "🎯" : undefined
   };
   await saveAgentProfile(input.workspaceRoot, profile);
   return profile;

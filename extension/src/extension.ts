@@ -35,6 +35,8 @@ import {
 import { exists, getHomeDir } from "./services/pathUtils";
 import { appendPromptHistory, findPromptHistory, markPromptHistoryApplied, readPromptHistory, removePromptHistory } from "./services/promptHistory";
 import { buildAgentGenerationPrompt } from "./services/promptBuilder";
+import { createProposal } from "./services/proposalService";
+import { resolveAgentCwd } from "./services/agentRuntimeService";
 import { clearPin, getPin, setPin } from "./services/pinStore";
 import {
   appendRunEvent,
@@ -44,6 +46,7 @@ import {
   startRun
 } from "./services/runStore";
 import { updateSkillFrontmatter } from "./services/skillEditor";
+import { prepareSandbox, type PrepareSandboxResult } from "./services/sandboxService";
 import { exportSkillPack, importSkillPack, previewSkillPack } from "./services/zipPack";
 import { ScheduleService } from "./schedule/scheduleService";
 import type {
@@ -1781,6 +1784,9 @@ class AgentCanvasPanel {
     const workspaceRoot = this.getWorkspaceRoot();
     const taskOutputs = new Map<string, unknown>();
     const nodeById = new Map(input.nodes.map((node) => [node.id, node] as const));
+    const snapshotAgents = this.snapshot?.agents ?? [];
+    const agentById = new Map(snapshotAgents.map((agent) => [agent.id, agent] as const));
+    const sandboxByAgentId = new Map<string, PrepareSandboxResult>();
     let stopped = false;
     let failedMessage: string | undefined;
 
@@ -1947,12 +1953,48 @@ class AgentCanvasPanel {
         }
 
         const node = nodeById.get(String(nextTask.meta?.nodeId ?? ""));
+        const taskAgent = node?.type === "agent" ? agentById.get(node.id) : undefined;
+        let executionCwd = resolveAgentCwd(taskAgent, workspaceRoot);
+        let proposalAgentId: string | undefined;
+        if (taskAgent?.runtime?.kind === "cli" && taskAgent.runtime.cwdMode === "agentHome") {
+          let sandbox = sandboxByAgentId.get(taskAgent.id);
+          if (!sandbox) {
+            const sandboxFiles = this.resolveSandboxFilesForNode(node);
+            sandbox = await prepareSandbox({
+              workspaceRoot,
+              runId: input.runId,
+              agentId: taskAgent.id,
+              files: sandboxFiles
+            });
+            sandboxByAgentId.set(taskAgent.id, sandbox);
+            await appendRunEvent({
+              workspaceRoot,
+              flowName: input.flowName,
+              event: {
+                ts: Date.now(),
+                flow: input.flowName,
+                runId: input.runId,
+                type: "run_log",
+                message: "sandbox_prepared",
+                meta: {
+                  agentId: taskAgent.id,
+                  files: sandbox.copiedFiles,
+                  workDir: sandbox.workDir,
+                  proposalJsonPath: sandbox.proposalJsonPath
+                }
+              }
+            });
+          }
+          executionCwd = resolveAgentCwd(taskAgent, workspaceRoot, sandbox.workDir);
+          proposalAgentId = taskAgent.id;
+        }
+
         const backend = await this.resolveBackendForTask(input.requestedBackendId, node);
         const prompt = this.buildTaskPrompt(nextTask, node, taskOutputs, input.flowName);
         const result = await executeCliPrompt({
           backend,
           prompt,
-          workspacePath: this.getWorkspaceRoot(),
+          workspacePath: executionCwd,
           timeoutMs: 120_000
         });
 
@@ -2013,6 +2055,55 @@ class AgentCanvasPanel {
               }
             }
           });
+        }
+
+        if (proposalAgentId) {
+          const sandbox = sandboxByAgentId.get(proposalAgentId);
+          if (sandbox) {
+            try {
+              const proposal = await createProposal({
+                workspaceRoot,
+                runId: input.runId,
+                agentId: proposalAgentId,
+                gitHead: sandbox.gitHead,
+                allowedFiles: sandbox.copiedFiles,
+                notes: `Task: ${nextTask.title}`
+              });
+              await appendRunEvent({
+                workspaceRoot,
+                flowName: input.flowName,
+                event: {
+                  ts: Date.now(),
+                  flow: input.flowName,
+                  runId: input.runId,
+                  type: "run_log",
+                  message: "proposal_created",
+                  meta: {
+                    agentId: proposalAgentId,
+                    proposalJsonPath: proposal.proposalJsonPath,
+                    patchPath: proposal.patchPath,
+                    changedFiles: proposal.changedFiles
+                  }
+                }
+              });
+            } catch (error) {
+              await appendRunEvent({
+                workspaceRoot,
+                flowName: input.flowName,
+                event: {
+                  ts: Date.now(),
+                  flow: input.flowName,
+                  runId: input.runId,
+                  type: "run_log",
+                  message: "proposal_failed",
+                  meta: {
+                    agentId: proposalAgentId,
+                    error: error instanceof Error ? error.message : String(error)
+                  }
+                }
+              });
+            }
+          }
         }
 
         this.scheduleService.recompute(input.runId);
@@ -2155,6 +2246,38 @@ class AgentCanvasPanel {
   private resolveNodeTitle(node: DiscoverySnapshot["nodes"][number]): string {
     const data = node.data as Record<string, unknown>;
     return String(data.name ?? data.title ?? data.role ?? node.id);
+  }
+
+  private resolveSandboxFilesForNode(
+    node: DiscoverySnapshot["nodes"][number] | undefined
+  ): string[] {
+    if (!node) {
+      return [];
+    }
+    const data = node.data as Record<string, unknown>;
+    const values: string[] = [];
+    const collect = (candidate: unknown) => {
+      if (Array.isArray(candidate)) {
+        for (const item of candidate) {
+          if (typeof item === "string" && item.trim().length > 0) {
+            values.push(item.trim());
+          }
+        }
+        return;
+      }
+      if (typeof candidate === "string") {
+        for (const token of candidate.split(/[\r\n,]+/)) {
+          const normalized = token.trim();
+          if (normalized) {
+            values.push(normalized);
+          }
+        }
+      }
+    };
+    collect(data.sandboxFiles);
+    collect(data.files);
+    collect(data.allowedFiles);
+    return [...new Set(values)];
   }
 
   private async tryLoadFlowDefinition(

@@ -16,8 +16,14 @@ HANDOFF
 Context:
 Goal:
 DoD:
-Files:
+SandboxWorkDir:
+ProposalJson:
+ChangedFiles:
+- path/to/file
+Tests:
+- (optional) npm test ...
 Next:
+- Orchestrator: review + apply or request changes
 ```
 
 ## Image Rules

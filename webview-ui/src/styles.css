@@ -29,6 +29,14 @@
   --edge-agent-link: #4a87e8;
   --edge-delegates: #e8a64a;
   --edge-interaction: #a86ee5;
+  --schedule-task-default: color-mix(in srgb, var(--secondary) 28%, var(--bg-soft));
+  --schedule-task-running: color-mix(in srgb, var(--accent) 30%, var(--bg-soft));
+  --schedule-task-done: color-mix(in srgb, var(--accent) 20%, var(--bg-soft));
+  --schedule-task-done-border: color-mix(in srgb, var(--accent) 55%, var(--line));
+  --schedule-task-failed: color-mix(in srgb, var(--danger) 18%, var(--bg-soft));
+  --schedule-task-failed-border: color-mix(in srgb, var(--danger) 58%, var(--line));
+  --schedule-now-line: color-mix(in srgb, var(--accent) 88%, white 12%);
+  --schedule-now-line-glow: color-mix(in srgb, var(--accent) 45%, transparent);
   --shadow: 0 16px 40px rgba(0, 0, 0, 0.26);
 }
 
@@ -256,7 +264,7 @@ button {
   transform: translate(-50%, -50%);
   width: min(420px, 78%);
   border: 1px dashed color-mix(in srgb, var(--fg) 44%, transparent);
-  border-radius: 15px;
+  border-radius: 12px;
   padding: 22px;
   text-align: center;
   background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
@@ -469,7 +477,7 @@ button {
 .hover-actions button {
   font-size: 10px;
   padding: 2px 6px;
-  border-radius: 7px;
+  border-radius: var(--radius, 8px);
 }
 
 .node-menu {
@@ -675,10 +683,10 @@ button {
 .modal-error {
   margin-top: 8px;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: color-mix(in srgb, #e05252 15%, transparent);
-  border: 1px solid color-mix(in srgb, #e05252 40%, transparent);
-  color: #e05252;
+  border-radius: var(--radius, 8px);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  color: var(--danger);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -858,9 +866,9 @@ button {
   background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
 }
 
-.active-toggle {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--line-strong)) !important;
-  background: color-mix(in srgb, var(--accent) 28%, transparent) !important;
+.top-actions button.active-toggle {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .schedule-view {
@@ -903,7 +911,7 @@ button {
   height: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: color-mix(in srgb, #4a87e8 28%, var(--bg-soft));
+  background: var(--schedule-task-default);
   color: var(--fg);
   padding: 6px 8px;
   display: grid;
@@ -938,25 +946,25 @@ button {
 }
 
 .schedule-task.status-running {
-  background: color-mix(in srgb, #2fa184 30%, var(--bg-soft));
+  background: var(--schedule-task-running);
 }
 
 .schedule-task.status-done {
-  background: color-mix(in srgb, #2fa184 20%, var(--bg-soft));
-  border-color: color-mix(in srgb, #2fa184 55%, var(--line));
+  background: var(--schedule-task-done);
+  border-color: var(--schedule-task-done-border);
 }
 
 .schedule-task.status-failed,
 .schedule-task.status-blocked {
-  background: color-mix(in srgb, #d95c4f 18%, var(--bg-soft));
-  border-color: color-mix(in srgb, #d95c4f 58%, var(--line));
+  background: var(--schedule-task-failed);
+  border-color: var(--schedule-task-failed-border);
 }
 
 .schedule-now-line {
   width: 2px;
   height: 100%;
-  background: color-mix(in srgb, #2fa184 88%, white 12%);
-  box-shadow: 0 0 12px color-mix(in srgb, #2fa184 45%, transparent);
+  background: var(--schedule-now-line);
+  box-shadow: 0 0 12px var(--schedule-now-line-glow);
   border-radius: 999px;
   pointer-events: none;
 }
@@ -1053,8 +1061,8 @@ button {
   justify-content: center;
   width: 20px;
   height: 20px;
-  border-radius: 6px;
-  background: color-mix(in srgb, #4a87e8 30%, transparent);
+  border-radius: var(--radius, 8px);
+  background: color-mix(in srgb, var(--secondary) 30%, transparent);
   font-size: 9px;
   font-weight: 700;
   margin-right: 4px;

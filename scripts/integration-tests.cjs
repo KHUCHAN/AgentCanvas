@@ -19,6 +19,7 @@ async function run() {
     test('Agent structure parser handles fenced JSON output', testAgentStructureParser),
     test('Prompt history CRUD roundtrip', testPromptHistoryRoundtrip),
     test('Agent profile service CRUD + assignment roundtrip', testAgentProfileRoundtrip),
+    test('Agent runtime cwd defaults by role', testAgentRuntimeDefaults),
     test('CLI detector returns known backend entries', testCliDetectorShape),
     test('Flow store save/load/list roundtrip', testFlowStoreRoundtrip),
     test('Interaction log is appended to JSONL', testInteractionLogRoundtrip),
@@ -26,7 +27,8 @@ async function run() {
     test('Schedule service blocks cyclic/missing dependencies', testScheduleServiceBlocking),
     test('Schedule service patchTask deep-merges nested fields', testScheduleServiceDeepPatch),
     test('Run store persists summary and events', testRunStoreRoundtrip),
-    test('Pin store set/get/clear roundtrip', testPinStoreRoundtrip)
+    test('Pin store set/get/clear roundtrip', testPinStoreRoundtrip),
+    test('Sandbox + proposal workflow roundtrip', testSandboxProposalRoundtrip)
   ];
 
   const results = await Promise.all(cases);
@@ -231,6 +233,37 @@ async function testAgentProfileRoundtrip() {
     await deleteAgentProfile(tmpRoot, listed[0].id);
     const afterDelete = await listCustomAgentProfiles(tmpRoot);
     assert.equal(afterDelete.length, 0, 'profile should be deleted');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+async function testAgentRuntimeDefaults() {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-runtime-'));
+  try {
+    const { createCustomAgentProfile } = require(
+      path.join(root, 'extension', 'dist', 'services', 'agentProfileService.js')
+    );
+
+    const worker = await createCustomAgentProfile({
+      workspaceRoot: tmpRoot,
+      homeDir: tmpRoot,
+      name: 'Worker Agent',
+      role: 'coder',
+      isOrchestrator: false
+    });
+    assert.equal(worker.runtime?.kind, 'cli');
+    assert.equal(worker.runtime?.cwdMode, 'agentHome');
+
+    const orchestrator = await createCustomAgentProfile({
+      workspaceRoot: tmpRoot,
+      homeDir: tmpRoot,
+      name: 'Orchestrator Agent',
+      role: 'orchestrator',
+      isOrchestrator: true
+    });
+    assert.equal(orchestrator.runtime?.kind, 'cli');
+    assert.equal(orchestrator.runtime?.cwdMode, 'workspace');
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -531,6 +564,66 @@ async function testPinStoreRoundtrip() {
       nodeId: 'node:1'
     });
     assert.equal(after, undefined);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+async function testSandboxProposalRoundtrip() {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-proposal-'));
+  try {
+    fs.mkdirSync(path.join(tmpRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, 'src', 'demo.txt'), 'before\n', 'utf8');
+    fs.mkdirSync(path.join(tmpRoot, '.agentcanvas'), { recursive: true });
+
+    const { prepareSandbox } = require(path.join(root, 'extension', 'dist', 'services', 'sandboxService.js'));
+    const { createProposal, applyProposal } = require(
+      path.join(root, 'extension', 'dist', 'services', 'proposalService.js')
+    );
+
+    const runId = 'run_sandbox_test';
+    const agentId = 'custom:worker';
+    const sandbox = await prepareSandbox({
+      workspaceRoot: tmpRoot,
+      runId,
+      agentId,
+      files: ['src/demo.txt']
+    });
+
+    assert.ok(fs.existsSync(path.join(sandbox.inputDir, 'src', 'demo.txt')));
+    assert.ok(fs.existsSync(path.join(sandbox.workDir, 'src', 'demo.txt')));
+
+    fs.writeFileSync(path.join(sandbox.workDir, 'src', 'demo.txt'), 'after\n', 'utf8');
+
+    const proposal = await createProposal({
+      workspaceRoot: tmpRoot,
+      runId,
+      agentId,
+      allowedFiles: sandbox.copiedFiles,
+      gitHead: sandbox.gitHead
+    });
+
+    assert.equal(proposal.hasChanges, true);
+    assert.ok(proposal.changedFiles.some((item) => item.path === 'src/demo.txt'));
+
+    const applied = await applyProposal({
+      workspaceRoot: tmpRoot,
+      runId,
+      agentId
+    });
+    assert.equal(applied.applied, true);
+    assert.equal(fs.readFileSync(path.join(tmpRoot, 'src', 'demo.txt'), 'utf8'), 'after\n');
+
+    await assert.rejects(
+      () =>
+        prepareSandbox({
+          workspaceRoot: tmpRoot,
+          runId: 'run_sandbox_bad',
+          agentId,
+          files: ['../secret.txt']
+        }),
+      /Path traversal|Invalid sandbox path|Absolute path/
+    );
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

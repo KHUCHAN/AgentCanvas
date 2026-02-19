@@ -81,8 +81,10 @@ function ScheduleCanvas(props: ScheduleViewProps) {
 
   const pxPerSec = useMemo(() => {
     const horizonSeconds = Math.max(300, (maxEndMs + TIMELINE_PADDING_MS) / 1000);
-    return clampNumber(TIMELINE_TARGET_WIDTH / horizonSeconds, MIN_PX_PER_SEC, MAX_PX_PER_SEC);
+    return clamp(TIMELINE_TARGET_WIDTH / horizonSeconds, MIN_PX_PER_SEC, MAX_PX_PER_SEC);
   }, [maxEndMs]);
+
+  const edgeColor = useMemo(() => getCssVar("--secondary", "#4a87e8"), []);
 
   const timelineWidth = Math.max(MIN_TIMELINE_WIDTH, timeToX(maxEndMs + TIMELINE_PADDING_MS, pxPerSec));
 
@@ -173,10 +175,10 @@ function ScheduleCanvas(props: ScheduleViewProps) {
             type: MarkerType.ArrowClosed,
             width: 16,
             height: 16,
-            color: "#6aa7f5"
+            color: edgeColor
           },
           style: {
-            stroke: "#6aa7f5",
+            stroke: edgeColor,
             strokeWidth: 1.6,
             opacity: 0.65
           }
@@ -184,7 +186,7 @@ function ScheduleCanvas(props: ScheduleViewProps) {
       }
     }
     return result;
-  }, [props.tasks]);
+  }, [edgeColor, props.tasks]);
 
   if (!props.runId) {
     return (
@@ -302,6 +304,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
+function getCssVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
 }
