@@ -1,14 +1,18 @@
+import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { CliBackendId, RunEvent, RunStatus, RunSummary } from "../types";
 import { sanitizeFlowName } from "./flowStore";
+import { sanitizeFileName } from "./pathUtils";
+
+const runEventWriteQueue = new Map<string, Promise<void>>();
 
 function runsDir(workspaceRoot: string, flowName: string): string {
   return join(workspaceRoot, ".agentcanvas", "runs", sanitizeFlowName(flowName));
 }
 
 function runFilePath(workspaceRoot: string, flowName: string, runId: string): string {
-  return join(runsDir(workspaceRoot, flowName), `${runId}.jsonl`);
+  return join(runsDir(workspaceRoot, flowName), `${sanitizeFileName(runId)}.jsonl`);
 }
 
 function indexFilePath(workspaceRoot: string, flowName: string): string {
@@ -16,7 +20,7 @@ function indexFilePath(workspaceRoot: string, flowName: string): string {
 }
 
 export function createRunId(prefix = "run"): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return `${prefix}_${Date.now().toString(36)}_${randomUUID().replace(/-/g, "")}`;
 }
 
 export async function startRun(input: {
@@ -73,15 +77,10 @@ export async function appendRunEvent(input: {
     ts: input.event.ts || Date.now()
   };
   const line = `${JSON.stringify(event)}\n`;
-  try {
-    await appendFile(filePath, line, "utf8");
-  } catch (error) {
-    if (!isFsErrorCode(error, "ENOENT")) {
-      throw error;
-    }
+  await enqueueRunEventWrite(filePath, async () => {
     await mkdir(runsDir(input.workspaceRoot, flow), { recursive: true });
     await appendFile(filePath, line, "utf8");
-  }
+  });
   return filePath;
 }
 
@@ -217,12 +216,15 @@ async function writeRunIndex(
   await writeFile(path, `${JSON.stringify(summaries, null, 2)}\n`, "utf8");
 }
 
-function isFsErrorCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    (error as { code: string }).code === code
-  );
+async function enqueueRunEventWrite(path: string, writer: () => Promise<void>): Promise<void> {
+  const key = resolve(path);
+  const previous = runEventWriteQueue.get(key) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(writer);
+  const cleanup = run.finally(() => {
+    if (runEventWriteQueue.get(key) === cleanup) {
+      runEventWriteQueue.delete(key);
+    }
+  });
+  runEventWriteQueue.set(key, cleanup);
+  await run;
 }

@@ -1,0 +1,10 @@
+<svg viewBox="0 0 400 300" width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+  <!-- 에이전트 카드 아웃라인 -->
+  <rect x="100" y="40" width="200" height="220" rx="16" fill="none" stroke="#4a87e8" stroke-opacity="0.15" stroke-width="3"/>
+  <!-- 플레이스홀더 1,2,3 -->
+  <rect x="120" y="80" width="160" height="36" rx="8" fill="none" stroke="#d7dce5" stroke-opacity="0.1" stroke-width="2" stroke-dasharray="4 4"/>
+  <rect x="120" y="130" width="160" height="36" rx="8" fill="none" stroke="#d7dce5" stroke-opacity="0.1" stroke-width="2" stroke-dasharray="4 4"/>
+  <rect x="120" y="180" width="160" height="36" rx="8" fill="none" stroke="#d7dce5" stroke-opacity="0.1" stroke-width="2" stroke-dasharray="4 4"/>
+  <!-- + 아이콘 -->
+  <path d="M 270 70 L 270 90 M 260 80 L 280 80" stroke="#2fa184" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+</svg>

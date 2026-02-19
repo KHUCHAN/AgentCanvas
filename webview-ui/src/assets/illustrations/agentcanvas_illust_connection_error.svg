@@ -1,0 +1,8 @@
+<svg viewBox="0 0 320 240" width="320" height="240" xmlns="http://www.w3.org/2000/svg">
+  <!-- 클라우드 -->
+  <path d="M 120 100 A 30 30 0 0 1 150 70 A 40 40 0 0 1 210 100 A 30 30 0 0 1 210 160 L 120 160 A 30 30 0 0 1 120 100" fill="#d7dce5" opacity="0.25"/>
+  <!-- 하단 연결선 -->
+  <line x1="160" y1="220" x2="160" y2="180" stroke="#2fa184" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+  <!-- 끊어짐/에러 마크 (빨간색) -->
+  <path d="M 145 165 L 175 195 M 175 165 L 145 195" stroke="#d95c4f" stroke-width="4" stroke-linecap="round" opacity="0.8"/>
+</svg>

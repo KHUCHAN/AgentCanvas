@@ -152,7 +152,14 @@ function ensureBaseAgents(agents: AgentProfile[], ctx: ProviderContext): AgentPr
       homeDir: ctx.homeDir,
       metadata: { source: "fallback" },
       role: "coder",
-      isOrchestrator: false
+      isOrchestrator: false,
+      description: "Workspace execution agent",
+      systemPrompt: "Focus on implementing tasks within the current workspace.",
+      runtime: {
+        kind: "cli",
+        backendId: "auto",
+        cwdMode: "workspace"
+      }
     });
   }
 
@@ -166,7 +173,14 @@ function ensureBaseAgents(agents: AgentProfile[], ctx: ProviderContext): AgentPr
       metadata: { source: "fallback" },
       role: "orchestrator",
       isOrchestrator: true,
-      avatar: "🎯"
+      avatar: "🎯",
+      description: "Default orchestration agent",
+      systemPrompt: "Plan work and delegate to worker agents when possible.",
+      runtime: {
+        kind: "cli",
+        backendId: "auto",
+        cwdMode: "workspace"
+      }
     });
   }
 
@@ -269,7 +283,13 @@ async function buildGraph(input: {
   const skillNodeBySkillId = new Map<string, string>();
 
   const addEdge = (edge: StudioEdge) => {
-    const key = `${edge.type}:${edge.source}:${edge.target}`;
+    const key = [
+      edge.type,
+      edge.source,
+      edge.target,
+      edge.label ?? "",
+      stableEdgeDataKey(edge.data)
+    ].join("|");
     if (edgeKeys.has(key)) {
       return;
     }
@@ -517,4 +537,17 @@ function initialsForAgent(name: string): string {
     return parts[0].slice(0, 2).toUpperCase();
   }
   return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
+}
+
+function stableEdgeDataKey(data: unknown): string {
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+  if (Array.isArray(data)) {
+    return `[${data.map((item) => stableEdgeDataKey(item)).join(",")}]`;
+  }
+
+  const record = data as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  return `{${keys.map((key) => `${key}:${stableEdgeDataKey(record[key])}`).join(",")}}`;
 }

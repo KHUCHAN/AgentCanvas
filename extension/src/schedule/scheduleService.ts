@@ -5,15 +5,23 @@ type ScheduleSubscriber = (event: TaskEvent) => void;
 
 type ScheduleServiceOptions = {
   defaultEstimateMs?: number;
+  emitThrottleMs?: number;
+  agentConcurrency?: number | Record<string, number>;
 };
 
 export class ScheduleService {
   private readonly runs = new Map<string, Map<string, Task>>();
   private readonly subscribers = new Map<string, Set<ScheduleSubscriber>>();
   private readonly defaultEstimateMs: number;
+  private readonly emitThrottleMs: number;
+  private readonly agentConcurrency?: number | Record<string, number>;
+  private readonly pendingEvents = new Map<string, TaskEvent[]>();
+  private readonly flushTimers = new Map<string, NodeJS.Timeout>();
 
   public constructor(options?: ScheduleServiceOptions) {
     this.defaultEstimateMs = options?.defaultEstimateMs ?? 120_000;
+    this.emitThrottleMs = Math.max(0, Math.floor(options?.emitThrottleMs ?? 0));
+    this.agentConcurrency = options?.agentConcurrency;
   }
 
   public createRun(runId: string, initialTasks: Task[]): void {
@@ -150,7 +158,8 @@ export class ScheduleService {
 
     const { updatedIds } = computeSchedule({
       tasks: run,
-      defaultEstimateMs: this.defaultEstimateMs
+      defaultEstimateMs: this.defaultEstimateMs,
+      agentConcurrency: this.agentConcurrency
     });
 
     if (updatedIds.length > 0) {
@@ -190,6 +199,33 @@ export class ScheduleService {
   }
 
   private emit(event: TaskEvent): void {
+    if (this.emitThrottleMs > 0) {
+      this.enqueueEvent(event);
+      return;
+    }
+    this.dispatchEvent(event);
+  }
+
+  private enqueueEvent(event: TaskEvent): void {
+    const queue = this.pendingEvents.get(event.runId) ?? [];
+    queue.push(event);
+    this.pendingEvents.set(event.runId, queue);
+
+    if (this.flushTimers.has(event.runId)) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.flushTimers.delete(event.runId);
+      const pending = this.pendingEvents.get(event.runId) ?? [];
+      this.pendingEvents.delete(event.runId);
+      for (const queued of pending) {
+        this.dispatchEvent(queued);
+      }
+    }, this.emitThrottleMs);
+    this.flushTimers.set(event.runId, timer);
+  }
+
+  private dispatchEvent(event: TaskEvent): void {
     const callbacks = this.subscribers.get(event.runId);
     if (!callbacks || callbacks.size === 0) {
       return;
@@ -238,13 +274,13 @@ function buildPatch(previous: Task, next: Task): Partial<Task> {
 }
 
 function isEqual(left: unknown, right: unknown): boolean {
-  return deepEqual(left, right, new WeakMap<object, WeakSet<object>>());
+  return deepEqual(left, right, new WeakMap<object, WeakMap<object, boolean>>());
 }
 
 function deepEqual(
   left: unknown,
   right: unknown,
-  seenPairs: WeakMap<object, WeakSet<object>>
+  seenPairs: WeakMap<object, WeakMap<object, boolean>>
 ): boolean {
   if (Object.is(left, right)) {
     return true;
@@ -274,13 +310,14 @@ function deepEqual(
   }
 
   const knownRights = seenPairs.get(left);
-  if (knownRights?.has(right)) {
-    return true;
+  const known = knownRights?.get(right);
+  if (known !== undefined) {
+    return known;
   }
   if (knownRights) {
-    knownRights.add(right);
+    knownRights.set(right, false);
   } else {
-    seenPairs.set(left, new WeakSet<object>([right]));
+    seenPairs.set(left, new WeakMap<object, boolean>([[right, false]]));
   }
 
   const leftKeys = Object.keys(left).sort();
@@ -295,9 +332,11 @@ function deepEqual(
       return false;
     }
     if (!deepEqual(left[leftKey], right[rightKey], seenPairs)) {
+      seenPairs.get(left)?.set(right, false);
       return false;
     }
   }
+  seenPairs.get(left)?.set(right, true);
   return true;
 }
 

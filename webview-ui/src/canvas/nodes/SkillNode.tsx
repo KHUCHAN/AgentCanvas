@@ -34,7 +34,7 @@ export default function SkillNode({ id, data, selected }: NodeProps<SkillNodeDat
         if (event.currentTarget !== event.target) {
           return;
         }
-        if (event.key === "Enter") {
+        if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           data.onOpen(data.path);
         }
@@ -64,6 +64,7 @@ export default function SkillNode({ id, data, selected }: NodeProps<SkillNodeDat
               }
             }}
             title="More actions"
+            aria-label="More skill actions"
             aria-expanded={menuOpen}
             aria-haspopup="menu"
           >

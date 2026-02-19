@@ -116,7 +116,10 @@ export async function applyProposal(input: ApplyProposalInput): Promise<ApplyPro
     };
   }
 
-  await runGit(["apply", "--check", paths.patchPath], input.workspaceRoot);
+  const checkResult = await runGitCheck(["apply", "--check", paths.patchPath], input.workspaceRoot);
+  if (!checkResult.ok) {
+    throw new Error(`Proposal patch check failed: ${checkResult.error ?? "unknown git apply --check error"}`);
+  }
   await runGit(["apply", paths.patchPath], input.workspaceRoot);
 
   return {
@@ -225,6 +228,27 @@ function extractChangedFiles(patch: string): ProposalChangedFile[] {
   for (const line of patch.split(/\r?\n/)) {
     if (line.startsWith("diff --git ")) {
       finalizeBlock();
+      const parsed = parseDiffGitPaths(line);
+      if (parsed) {
+        block.oldPath = parsed.oldPath;
+        block.newPath = parsed.newPath;
+      }
+      continue;
+    }
+    if (line.startsWith("rename from ")) {
+      block.oldPath = parsePatchPath(line.slice("rename from ".length));
+      continue;
+    }
+    if (line.startsWith("rename to ")) {
+      block.newPath = parsePatchPath(line.slice("rename to ".length));
+      continue;
+    }
+    if (line.startsWith("copy from ")) {
+      block.oldPath = parsePatchPath(line.slice("copy from ".length));
+      continue;
+    }
+    if (line.startsWith("copy to ")) {
+      block.newPath = parsePatchPath(line.slice("copy to ".length));
       continue;
     }
     if (line.startsWith("--- ")) {
@@ -233,6 +257,14 @@ function extractChangedFiles(patch: string): ProposalChangedFile[] {
     }
     if (line.startsWith("+++ ")) {
       block.newPath = parsePatchPath(line.slice(4));
+      continue;
+    }
+    if (line.startsWith("Binary files ")) {
+      const parsed = parseBinaryPaths(line);
+      if (parsed) {
+        block.oldPath = parsed.oldPath;
+        block.newPath = parsed.newPath;
+      }
       continue;
     }
   }
@@ -252,6 +284,28 @@ function parsePatchPath(raw: string): string | null {
     return token.slice(2);
   }
   return token;
+}
+
+function parseDiffGitPaths(line: string): { oldPath: string | null; newPath: string | null } | undefined {
+  const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line.trim());
+  if (!match) {
+    return undefined;
+  }
+  return {
+    oldPath: parsePatchPath(`a/${match[1]}`),
+    newPath: parsePatchPath(`b/${match[2]}`)
+  };
+}
+
+function parseBinaryPaths(line: string): { oldPath: string | null; newPath: string | null } | undefined {
+  const match = /^Binary files (.+) and (.+) differ$/.exec(line.trim());
+  if (!match) {
+    return undefined;
+  }
+  return {
+    oldPath: parsePatchPath(match[1]),
+    newPath: parsePatchPath(match[2])
+  };
 }
 
 function stripSandboxPrefixes(rawPatch: string): string {
@@ -307,5 +361,21 @@ async function runGit(args: string[], cwd: string): Promise<void> {
   } catch (error) {
     const parsed = error as { stderr?: string; stdout?: string; message?: string };
     throw new Error(parsed.stderr || parsed.stdout || parsed.message || "git command failed");
+  }
+}
+
+async function runGitCheck(
+  args: string[],
+  cwd: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await execFile("git", args, { cwd, maxBuffer: 16 * 1024 * 1024 });
+    return { ok: true };
+  } catch (error) {
+    const parsed = error as { stderr?: string; stdout?: string; message?: string };
+    return {
+      ok: false,
+      error: (parsed.stderr || parsed.stdout || parsed.message || "git command failed").trim()
+    };
   }
 }

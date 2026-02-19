@@ -3,31 +3,44 @@ import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { CliBackend, CliBackendOverride, CliBackendOverrides } from "../types";
+import { executeCliPrompt } from "./cliExecutor";
 
 const execFileAsync = promisify(execFile);
+
+const LEGACY_TO_CANONICAL: Partial<Record<CliBackend["id"], CliBackend["id"]>> = {
+  "claude-code": "claude",
+  "gemini-cli": "gemini",
+  "codex-cli": "codex"
+};
+
+const CANONICAL_TO_LEGACY: Partial<Record<CliBackend["id"], CliBackend["id"]>> = {
+  claude: "claude-code",
+  gemini: "gemini-cli",
+  codex: "codex-cli"
+};
 
 const DEFAULT_BACKENDS: Array<
   Pick<CliBackend, "id" | "displayName" | "command" | "args" | "stdinPrompt">
 > = [
   {
-    id: "claude-code",
+    id: "claude",
     displayName: "Claude Code",
     command: "claude",
     args: ["--print"],
     stdinPrompt: true
   },
   {
-    id: "gemini-cli",
+    id: "gemini",
     displayName: "Gemini CLI",
     command: "gemini",
     args: [],
     stdinPrompt: true
   },
   {
-    id: "codex-cli",
+    id: "codex",
     displayName: "Codex CLI",
     command: "codex",
-    args: ["--quiet"],
+    args: ["exec", "-"],
     stdinPrompt: true
   },
   {
@@ -47,10 +60,15 @@ export async function detectAllCliBackends(input?: {
   const detected: CliBackend[] = [];
 
   for (const preset of DEFAULT_BACKENDS) {
-    const resolved = applyBackendOverride(
-      preset,
-      input?.backendOverrides?.[preset.id as Exclude<CliBackend["id"], "auto">]
+    const override = resolveBackendOverride(
+      input?.backendOverrides,
+      preset.id as Exclude<CliBackend["id"], "auto">
     );
+    const resolvedBase = applyBackendOverride(
+      preset,
+      override
+    );
+    const resolved = normalizeBackendForCompatibility(resolvedBase);
     const available = await detectCliCommand(resolved.command);
     detected.push({
       ...resolved,
@@ -85,7 +103,60 @@ export async function detectAllCliBackends(input?: {
   return [auto, ...detected];
 }
 
+export type BackendTestResult = {
+  backendId: CliBackend["id"];
+  ok: boolean;
+  durationMs: number;
+  model?: string;
+  message: string;
+  outputPreview?: string;
+};
+
+export async function testBackend(input: {
+  backends: CliBackend[];
+  backendId: CliBackend["id"];
+  workspacePath: string;
+  timeoutMs?: number;
+}): Promise<BackendTestResult> {
+  const startedAt = Date.now();
+  try {
+    const backend = pickPromptBackend(input.backends, input.backendId);
+    const result = await executeCliPrompt({
+      backend,
+      prompt: "Hello. Respond with your model name only.",
+      workspacePath: input.workspacePath,
+      timeoutMs: input.timeoutMs ?? 30_000
+    });
+    if (!result.success) {
+      return {
+        backendId: backend.id,
+        ok: false,
+        durationMs: Date.now() - startedAt,
+        message: result.error || "Backend test failed"
+      };
+    }
+    const outputLine = result.output.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim();
+    return {
+      backendId: backend.id,
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      model: result.usage?.model || outputLine,
+      message: "Backend is operational",
+      outputPreview: outputLine
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      backendId: normalizeBackendId(input.backendId),
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      message: detail
+    };
+  }
+}
+
 export function pickPromptBackend(backends: CliBackend[], backendId: CliBackend["id"]): CliBackend {
+  const normalizedBackendId = normalizeBackendId(backendId);
   if (backendId === "auto") {
     const preferred = backends.find((backend) => backend.available && backend.id !== "auto");
     if (preferred) {
@@ -96,9 +167,9 @@ export function pickPromptBackend(backends: CliBackend[], backendId: CliBackend[
     );
   }
 
-  const backend = backends.find((item) => item.id === backendId);
+  const backend = backends.find((item) => item.id === normalizedBackendId);
   if (!backend) {
-    throw new Error(`Unknown CLI backend: ${backendId}`);
+    throw new Error(`Unknown CLI backend: ${normalizedBackendId}`);
   }
   if (!backend.available) {
     throw new Error(`CLI backend is not available: ${backend.displayName}`);
@@ -193,6 +264,22 @@ function applyBackendOverride(
   };
 }
 
+function normalizeBackendForCompatibility(
+  backend: Pick<CliBackend, "id" | "displayName" | "command" | "args" | "stdinPrompt" | "env">
+): Pick<CliBackend, "id" | "displayName" | "command" | "args" | "stdinPrompt" | "env"> {
+  if (backend.id !== "codex" && backend.id !== "codex-cli") {
+    return backend;
+  }
+
+  const filteredArgs = backend.args.filter((arg) => arg !== "--quiet");
+  const normalizedArgs = filteredArgs.length > 0 ? filteredArgs : ["exec", "-"];
+  return {
+    ...backend,
+    args: normalizedArgs,
+    stdinPrompt: true
+  };
+}
+
 function splitCommand(value: string): string[] {
   const tokens: string[] = [];
   let current = "";
@@ -234,4 +321,19 @@ function splitCommand(value: string): string[] {
 
 function isLikelyPath(command: string): boolean {
   return command.includes("/") || command.includes("\\") || command.startsWith(".");
+}
+
+function normalizeBackendId(backendId: Exclude<CliBackend["id"], "auto">): Exclude<CliBackend["id"], "auto">;
+function normalizeBackendId(backendId: CliBackend["id"]): CliBackend["id"];
+function normalizeBackendId(backendId: CliBackend["id"]): CliBackend["id"] {
+  return LEGACY_TO_CANONICAL[backendId] ?? backendId;
+}
+
+function resolveBackendOverride(
+  overrides: CliBackendOverrides | undefined,
+  backendId: Exclude<CliBackend["id"], "auto">
+): CliBackendOverride | undefined {
+  const canonical = normalizeBackendId(backendId) as Exclude<CliBackend["id"], "auto">;
+  const legacy = CANONICAL_TO_LEGACY[canonical] as Exclude<CliBackend["id"], "auto"> | undefined;
+  return overrides?.[canonical] ?? (legacy ? overrides?.[legacy] : undefined);
 }

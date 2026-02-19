@@ -56,6 +56,7 @@ export default function RuleDocNode({ id, data, selected }: NodeProps<RuleDocNod
               }
             }}
             title="More actions"
+            aria-label="More rule actions"
             aria-expanded={menuOpen}
             aria-haspopup="menu"
           >

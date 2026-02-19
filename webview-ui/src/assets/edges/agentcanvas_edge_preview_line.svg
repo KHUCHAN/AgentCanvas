@@ -1,0 +1,17 @@
+<svg viewBox="0 0 200 4" width="200" height="4" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .preview-dash { animation: dash-flow 1s linear infinite; }
+    @keyframes dash-flow {
+      0%   { stroke-dashoffset: 28; }
+      100% { stroke-dashoffset: 0; }
+    }
+  </style>
+  <!-- dashed preview line -->
+  <line x1="0" y1="2" x2="192" y2="2"
+    stroke="#d7dce5" stroke-opacity="0.5"
+    stroke-width="2" stroke-linecap="round"
+    stroke-dasharray="8 6"
+    class="preview-dash"/>
+  <!-- end dot — "will connect here" indicator -->
+  <circle cx="196" cy="2" r="2" fill="#d7dce5" fill-opacity="0.5"/>
+</svg>

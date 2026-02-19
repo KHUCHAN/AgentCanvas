@@ -86,9 +86,12 @@ function ScheduleCanvas(props: ScheduleViewProps) {
 
   const edgeColor = useMemo(() => getCssVar("--secondary", "#4a87e8"), []);
 
-  const timelineWidth = Math.max(MIN_TIMELINE_WIDTH, timeToX(maxEndMs + TIMELINE_PADDING_MS, pxPerSec));
+  const timelineWidth = useMemo(
+    () => Math.max(MIN_TIMELINE_WIDTH, timeToX(maxEndMs + TIMELINE_PADDING_MS, pxPerSec)),
+    [maxEndMs, pxPerSec]
+  );
 
-  const nodes = useMemo<Node[]>(() => {
+  const staticNodes = useMemo<Node[]>(() => {
     const laneNodes: Node[] = laneOrder.map((agentId, index) => {
       const agent = props.agents.find((item) => item.id === agentId);
       return {
@@ -129,8 +132,20 @@ function ScheduleCanvas(props: ScheduleViewProps) {
       };
     });
 
+    return [...laneNodes, ...taskNodes];
+  }, [
+    laneIndex,
+    laneOrder,
+    props.agents,
+    props.selectedTaskId,
+    props.tasks,
+    pxPerSec,
+    timelineWidth
+  ]);
+
+  const nowNode = useMemo<Node>(() => {
     const nowHeight = Math.max(360, laneOrder.length * LANE_HEIGHT);
-    const nowLineNode: Node = {
+    return {
       id: `now:${props.runId ?? "run"}`,
       type: "scheduleNow",
       position: { x: timeToX(props.nowMs, pxPerSec), y: 0 },
@@ -147,18 +162,13 @@ function ScheduleCanvas(props: ScheduleViewProps) {
         height: nowHeight
       }
     };
+  }, [laneOrder.length, props.nowMs, props.runId, pxPerSec]);
 
-    return [...laneNodes, ...taskNodes, nowLineNode];
+  const nodes = useMemo<Node[]>(() => {
+    return [...staticNodes, nowNode];
   }, [
-    laneIndex,
-    laneOrder,
-    props.agents,
-    props.nowMs,
-    props.runId,
-    props.selectedTaskId,
-    props.tasks,
-    pxPerSec,
-    timelineWidth
+    nowNode,
+    staticNodes
   ]);
 
   const edges = useMemo<Edge[]>(() => {

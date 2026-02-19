@@ -4,6 +4,8 @@ import type { PinnedOutput } from "../types";
 import { sanitizeFlowName } from "./flowStore";
 import { sanitizeFileName } from "./pathUtils";
 
+const DEFAULT_PIN_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+
 function pinDir(workspaceRoot: string, flowName: string): string {
   return join(workspaceRoot, ".agentcanvas", "pins", sanitizeFlowName(flowName));
 }
@@ -24,6 +26,10 @@ export async function getPin(input: {
     if (!parsed || typeof parsed.nodeId !== "string") {
       return undefined;
     }
+    if (isExpired(parsed)) {
+      await rm(path, { force: true });
+      return undefined;
+    }
     return parsed;
   } catch {
     return undefined;
@@ -42,7 +48,8 @@ export async function setPin(input: {
     flowName: sanitizeFlowName(input.flowName),
     nodeId: input.nodeId,
     output: input.output,
-    pinnedAt: Date.now()
+    pinnedAt: Date.now(),
+    expiresAt: Date.now() + resolvePinTtlMs()
   };
   const path = pinFilePath(input.workspaceRoot, input.flowName, input.nodeId);
   await writeFile(path, `${JSON.stringify(pin, null, 2)}\n`, "utf8");
@@ -78,12 +85,27 @@ export async function listPins(input: {
     try {
       const raw = await readFile(join(dir, entry), "utf8");
       const parsed = JSON.parse(raw) as PinnedOutput;
-      if (parsed && typeof parsed.nodeId === "string") {
+      if (parsed && typeof parsed.nodeId === "string" && !isExpired(parsed)) {
         pins.push(parsed);
+      } else if (parsed && isExpired(parsed)) {
+        await rm(join(dir, entry), { force: true }).catch(() => undefined);
       }
     } catch {
       continue;
     }
   }
   return pins.sort((left, right) => right.pinnedAt - left.pinnedAt);
+}
+
+function resolvePinTtlMs(): number {
+  const configured = Number(process.env.AGENTCANVAS_PIN_TTL_MS);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_PIN_TTL_MS;
+  }
+  return Math.max(60_000, Math.floor(configured));
+}
+
+function isExpired(pin: PinnedOutput): boolean {
+  const expiresAt = typeof pin.expiresAt === "number" ? pin.expiresAt : pin.pinnedAt + resolvePinTtlMs();
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }

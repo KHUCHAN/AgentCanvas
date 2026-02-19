@@ -3,6 +3,7 @@ import type { Task } from "./types";
 export type ComputeScheduleInput = {
   tasks: Map<string, Task>;
   defaultEstimateMs: number;
+  agentConcurrency?: number | Record<string, number>;
 };
 
 export type ComputeScheduleResult = {
@@ -11,7 +12,9 @@ export type ComputeScheduleResult = {
 };
 
 export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleResult {
-  const { tasks, defaultEstimateMs } = input;
+  const { tasks, defaultEstimateMs, agentConcurrency } = input;
+  const cycleNodes = findCycleNodes(tasks);
+  const cycleNodeSet = new Set(cycleNodes);
   const indeg = new Map<string, number>();
   const next = new Map<string, string[]>();
 
@@ -40,7 +43,7 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
   const updatedSet = new Set<string>();
   const blockedSet = new Set<string>();
   const processed = new Set<string>();
-  const agentAvail = new Map<string, number>();
+  const agentAvail = new Map<string, number[]>();
   const now = Date.now();
   const isTerminalStatus = (status: Task["status"]): boolean =>
     status === "running" || status === "done" || status === "failed" || status === "canceled";
@@ -74,7 +77,9 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
 
     const laneAgentId = task.overrides?.forceAgentId ?? task.agentId;
     const depReadyAt = depsEnd(task);
-    const laneReadyAt = agentAvail.get(laneAgentId) ?? 0;
+    const laneState = getLaneState(agentAvail, laneAgentId, resolveAgentConcurrency(agentConcurrency, laneAgentId));
+    const laneIndex = pickEarliestLane(laneState);
+    const laneReadyAt = laneState[laneIndex] ?? 0;
     const earliest = Math.max(depReadyAt, laneReadyAt);
     const plannedStart =
       task.overrides?.forceStartMs !== undefined
@@ -95,7 +100,8 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
       markUpdated(task.id);
     }
 
-    agentAvail.set(laneAgentId, plannedEnd);
+    laneState[laneIndex] = plannedEnd;
+    agentAvail.set(laneAgentId, laneState);
 
     for (const nextId of next.get(id) ?? []) {
       const current = (indeg.get(nextId) ?? 1) - 1;
@@ -118,7 +124,9 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
     const blockerMessage =
       missingDeps.length > 0
         ? `Missing dependencies: ${missingDeps.join(", ")}`
-        : "Dependency cycle detected";
+        : cycleNodeSet.has(taskId)
+          ? `Dependency cycle detected: ${cycleNodes.join(" -> ")}`
+          : "Dependency graph unresolved";
     const blockerChanged =
       task.blocker?.kind !== "external" || task.blocker?.message !== blockerMessage;
     if (task.status !== "blocked" || blockerChanged) {
@@ -162,7 +170,9 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
         task.status = "blocked";
         task.blocker = {
           kind: "external",
-          message: "Dependency cycle or unresolved dependency"
+          message: cycleNodeSet.has(taskId)
+            ? `Dependency cycle detected: ${cycleNodes.join(" -> ")}`
+            : "Dependency cycle or unresolved dependency"
         };
         task.updatedAtMs = now;
         markUpdated(taskId);
@@ -202,4 +212,114 @@ function normalizeEstimate(estimateMs: number | undefined, defaultEstimateMs: nu
     return estimateMs;
   }
   return defaultEstimateMs;
+}
+
+function resolveAgentConcurrency(
+  value: number | Record<string, number> | undefined,
+  agentId: string
+): number {
+  if (typeof value === "number") {
+    return normalizeConcurrency(value);
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const perAgent = value[agentId];
+    if (typeof perAgent === "number") {
+      return normalizeConcurrency(perAgent);
+    }
+  }
+  return 1;
+}
+
+function normalizeConcurrency(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(1, Math.min(32, Math.floor(value)));
+}
+
+function getLaneState(
+  agentAvail: Map<string, number[]>,
+  agentId: string,
+  concurrency: number
+): number[] {
+  const current = agentAvail.get(agentId);
+  if (!current) {
+    return new Array<number>(concurrency).fill(0);
+  }
+  if (current.length >= concurrency) {
+    return current.slice(0, concurrency);
+  }
+  return [...current, ...new Array<number>(concurrency - current.length).fill(0)];
+}
+
+function pickEarliestLane(lanes: number[]): number {
+  let selectedIndex = 0;
+  let selectedValue = lanes[0] ?? 0;
+  for (let index = 1; index < lanes.length; index += 1) {
+    const candidate = lanes[index] ?? 0;
+    if (candidate < selectedValue) {
+      selectedValue = candidate;
+      selectedIndex = index;
+    }
+  }
+  return selectedIndex;
+}
+
+function findCycleNodes(tasks: Map<string, Task>): string[] {
+  type VisitState = 0 | 1 | 2;
+  const visitState = new Map<string, VisitState>();
+  const stack: string[] = [];
+
+  const visit = (taskId: string): string[] | undefined => {
+    const state = visitState.get(taskId) ?? 0;
+    if (state === 1) {
+      const cycleStart = stack.indexOf(taskId);
+      if (cycleStart >= 0) {
+        return [...stack.slice(cycleStart), taskId];
+      }
+      return [taskId];
+    }
+    if (state === 2) {
+      return undefined;
+    }
+
+    visitState.set(taskId, 1);
+    stack.push(taskId);
+
+    const task = tasks.get(taskId);
+    if (task) {
+      for (const depId of task.deps) {
+        if (!tasks.has(depId)) {
+          continue;
+        }
+        const cycle = visit(depId);
+        if (cycle && cycle.length > 0) {
+          return cycle;
+        }
+      }
+    }
+
+    stack.pop();
+    visitState.set(taskId, 2);
+    return undefined;
+  };
+
+  for (const [taskId] of tasks) {
+    const cycle = visit(taskId);
+    if (cycle && cycle.length > 0) {
+      return normalizeCyclePath(cycle);
+    }
+  }
+
+  return [];
+}
+
+function normalizeCyclePath(cycle: string[]): string[] {
+  if (cycle.length === 0) {
+    return [];
+  }
+  if (cycle[0] !== cycle[cycle.length - 1]) {
+    return [...cycle, cycle[0]];
+  }
+  return cycle;
 }

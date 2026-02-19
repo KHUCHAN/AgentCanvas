@@ -1,14 +1,29 @@
 import type {
   AgentRuntime,
   AgentRole,
+  ContextPacket,
+  CacheConfig,
+  CacheMetrics,
   CliBackend,
   CliBackendId,
   CliBackendOverrides,
   DiscoverySnapshot,
+  EventProvenance,
   GeneratedAgentStructure,
+  HandoffEnvelope,
+  InteractionEdgeData,
+  MemoryCommit,
+  MemoryItem,
+  MemoryItemType,
+  MemoryNamespace,
+  MemoryQueryResult,
+  ProposalReview,
   PromptHistoryEntry,
+  ReviewDecision,
+  SessionContext,
   SkillPackPreview,
-  TaskEvent
+  TaskEvent,
+  TaskStatus
 } from "../types";
 
 export type RequestId = string;
@@ -95,6 +110,7 @@ export type WebviewToExtensionMessage =
     >
   | RequestMessage<"DELETE_AGENT", { agentId: string }>
   | RequestMessage<"DETECT_CLI_BACKENDS">
+  | RequestMessage<"TEST_BACKEND", { backendId: CliBackendId }>
   | RequestMessage<
       "GENERATE_AGENT_STRUCTURE",
       {
@@ -131,6 +147,7 @@ export type WebviewToExtensionMessage =
       { runId: string; taskId: string; forceStartMs?: number; forceAgentId?: string }
     >
   | RequestMessage<"TASK_SET_PRIORITY", { runId: string; taskId: string; priority?: number }>
+  | RequestMessage<"TASK_SET_STATUS", { runId: string; taskId: string; status: TaskStatus }>
   | RequestMessage<
       "RUN_FLOW",
       {
@@ -139,18 +156,51 @@ export type WebviewToExtensionMessage =
         runName?: string;
         tags?: string[];
         usePinnedOutputs?: boolean;
+        session?: SessionContext;
       }
     >
   | RequestMessage<
       "RUN_NODE",
-      { flowName: string; nodeId: string; backendId?: CliBackendId; usePinnedOutput?: boolean }
+      {
+        flowName: string;
+        nodeId: string;
+        backendId?: CliBackendId;
+        usePinnedOutput?: boolean;
+        session?: SessionContext;
+      }
     >
+  | RequestMessage<"REPLAY_RUN", { runId: string; modifiedPrompts?: Record<string, string> }>
   | RequestMessage<"STOP_RUN", { runId: string }>
   | RequestMessage<"LIST_RUNS", { flowName?: string } | undefined>
   | RequestMessage<"LOAD_RUN", { flowName: string; runId: string }>
   | RequestMessage<"PIN_OUTPUT", { flowName: string; nodeId: string; output: unknown }>
   | RequestMessage<"UNPIN_OUTPUT", { flowName: string; nodeId: string }>
+  | RequestMessage<"APPLY_PROPOSAL", { runId: string; agentId: string }>
+  | RequestMessage<"REJECT_PROPOSAL", { runId: string; agentId: string; reason?: string }>
+  | RequestMessage<"INSERT_PATTERN", { patternId: string; anchor?: Position }>
+  | RequestMessage<"CONFIGURE_INTERACTION_EDGE", { edgeId: string; label?: string; data: InteractionEdgeData }>
+  | RequestMessage<"HANDOFF_RECEIVED", { runId: string; fromAgentId: string; toAgentId: string; handoff: HandoffEnvelope }>
+  | RequestMessage<"GET_COLLAB_LOG", { runId: string }>
+  | RequestMessage<"GET_COLLAB_REPORT_MD", { runId: string }>
+  | RequestMessage<"MANUAL_REVIEW", { runId: string; taskId: string; decision: ReviewDecision; reason?: string }>
+  | RequestMessage<
+      "GET_MEMORY_ITEMS",
+      { namespace?: MemoryNamespace; type?: MemoryItemType; limit?: number } | undefined
+    >
+  | RequestMessage<
+      "SEARCH_MEMORY",
+      { query: string; namespaces?: MemoryNamespace[]; budgetTokens?: number }
+    >
+  | RequestMessage<"ADD_MEMORY_ITEM", { item: Omit<MemoryItem, "id" | "createdAt" | "updatedAt"> }>
+  | RequestMessage<"SUPERSEDE_MEMORY", { oldItemId: string; newContent: string; reason: string }>
+  | RequestMessage<"MEMORY_CHECKOUT", { commitId: string }>
+  | RequestMessage<"GET_MEMORY_COMMITS", { limit?: number } | undefined>
+  | RequestMessage<"GET_CACHE_METRICS", { flowName: string }>
+  | RequestMessage<"GET_CACHE_CONFIG">
+  | RequestMessage<"UPDATE_CACHE_CONFIG", CacheConfig>
+  | RequestMessage<"RESET_CACHE_METRICS", { flowName?: string } | undefined>
   | RequestMessage<"SET_AGENT_RUNTIME", { agentId: string; runtime: AgentRuntime | null }>
+  | RequestMessage<"SET_DEFAULT_BACKEND", { backendId: CliBackendId }>
   | RequestMessage<"SET_BACKEND_OVERRIDES", { overrides: CliBackendOverrides }>
   | RequestMessage<"LOG_INTERACTION_EVENT", {
       flowName: string;
@@ -171,8 +221,22 @@ export type ExtensionToWebviewMessage =
     }
   | { type: "IMPORT_PREVIEW"; payload: { preview: SkillPackPreview } }
   | { type: "CLI_BACKENDS"; payload: { backends: CliBackend[] } }
+  | { type: "COLLAB_EVENT"; payload: {
+      event: "task_dispatched" | "proposal_submitted" | "proposal_reviewed" | "announce";
+      runId: string;
+      flowName: string;
+      actor: string;
+      provenance: EventProvenance;
+      data: unknown;
+      ts: number;
+    } }
+  | { type: "MEMORY_UPDATED"; payload: { item: MemoryItem; action: "added" | "updated" | "superseded" | "deleted" } }
+  | { type: "MEMORY_QUERY_RESULT"; payload: MemoryQueryResult }
+  | { type: "CONTEXT_PACKET_BUILT"; payload: { taskId: string; packet: ContextPacket } }
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
   | { type: "SCHEDULE_EVENT"; payload: { event: TaskEvent } }
+  | { type: "CACHE_METRICS_UPDATE"; payload: CacheMetrics }
+  | { type: "CONTEXT_THRESHOLD_WARNING"; payload: { current: number; threshold: number } }
   | {
       type: "GENERATION_PROGRESS";
       payload: {

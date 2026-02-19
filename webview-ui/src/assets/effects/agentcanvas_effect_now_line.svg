@@ -1,0 +1,8 @@
+<svg viewBox="0 0 4 120" width="4" height="120" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .halo { animation: pulseGlow 2s infinite ease-in-out; }
+    @keyframes pulseGlow { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.6; } }
+  </style>
+  <rect x="0" y="0" width="4" height="120" fill="#3dd9a8" class="halo"/>
+  <rect x="1" y="0" width="2" height="120" fill="#2fa184"/>
+</svg>

@@ -1,0 +1,10 @@
+<svg viewBox="0 0 80 80" width="80" height="80" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .warn { animation: pWarn 2s infinite ease-in-out; transform-origin: 40px 44px; }
+    @keyframes pWarn { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.05); opacity: 0.8; } }
+  </style>
+  <g class="warn">
+    <polygon points="40,16 64,60 16,60" fill="none" stroke="#d4a11e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M40 32 v14 m0 6 v2" stroke="#d4a11e" stroke-width="4" stroke-linecap="round"/>
+  </g>
+</svg>

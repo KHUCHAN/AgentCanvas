@@ -19,7 +19,9 @@ async function run() {
     test('Agent structure parser handles fenced JSON output', testAgentStructureParser),
     test('Prompt history CRUD roundtrip', testPromptHistoryRoundtrip),
     test('Agent profile service CRUD + assignment roundtrip', testAgentProfileRoundtrip),
+    test('Agent profile updates keep delegation with stale cache input', testAgentProfileStaleCachePreservesDelegation),
     test('Agent runtime cwd defaults by role', testAgentRuntimeDefaults),
+    test('Interaction firewall validates communication and handoff scope', testInteractionValidationFirewall),
     test('CLI detector returns known backend entries', testCliDetectorShape),
     test('Flow store save/load/list roundtrip', testFlowStoreRoundtrip),
     test('Interaction log is appended to JSONL', testInteractionLogRoundtrip),
@@ -238,6 +240,53 @@ async function testAgentProfileRoundtrip() {
   }
 }
 
+async function testAgentProfileStaleCachePreservesDelegation() {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-stale-profile-'));
+  try {
+    const {
+      createCustomAgentProfile,
+      setAgentDelegation,
+      assignSkillToAgent,
+      assignMcpToAgent,
+      listCustomAgentProfiles
+    } = require(path.join(root, 'extension', 'dist', 'services', 'agentProfileService.js'));
+
+    const created = await createCustomAgentProfile({
+      workspaceRoot: tmpRoot,
+      homeDir: tmpRoot,
+      name: 'Stale Cache Agent',
+      role: 'orchestrator',
+      isOrchestrator: true
+    });
+
+    await setAgentDelegation({
+      workspaceRoot: tmpRoot,
+      agent: created,
+      workerIds: ['worker-a', 'worker-b']
+    });
+
+    // Intentionally pass the stale profile from phase 1 to reproduce the missing-edge regression.
+    await assignSkillToAgent({
+      workspaceRoot: tmpRoot,
+      agent: created,
+      skillId: 'skill:stale'
+    });
+    await assignMcpToAgent({
+      workspaceRoot: tmpRoot,
+      agent: created,
+      mcpServerId: 'mcp:stale'
+    });
+
+    const listed = await listCustomAgentProfiles(tmpRoot);
+    assert.equal(listed.length, 1, 'expected one profile after stale-cache updates');
+    assert.deepEqual(listed[0].delegatesTo, ['worker-a', 'worker-b'], 'delegation should survive stale-cache updates');
+    assert.ok((listed[0].assignedSkillIds ?? []).includes('skill:stale'));
+    assert.ok((listed[0].assignedMcpServerIds ?? []).includes('mcp:stale'));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
 async function testAgentRuntimeDefaults() {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-runtime-'));
   try {
@@ -269,12 +318,105 @@ async function testAgentRuntimeDefaults() {
   }
 }
 
+function testInteractionValidationFirewall() {
+  const {
+    assertDirectedCommunicationAllowed,
+    assertValidHandoffEnvelope,
+    assertHandoffPathsWithinScope
+  } = require(path.join(root, 'extension', 'dist', 'services', 'interactionValidation.js'));
+
+  const edges = [
+    { id: 'e1', source: 'agent:orch', target: 'agent:worker-a', type: 'delegates' },
+    { id: 'e2', source: 'agent:worker-a', target: 'agent:worker-b', type: 'interaction' }
+  ];
+
+  assert.doesNotThrow(() =>
+    assertDirectedCommunicationAllowed({
+      edges,
+      fromAgentId: 'agent:orch',
+      toAgentId: 'agent:worker-a'
+    })
+  );
+  assert.throws(
+    () =>
+      assertDirectedCommunicationAllowed({
+        edges,
+        fromAgentId: 'agent:worker-b',
+        toAgentId: 'agent:orch'
+      }),
+    /not allowed/
+  );
+
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-handoff-scope-'));
+  try {
+    const sandboxRootDir = path.join(workspaceRoot, '.agentcanvas', 'sandboxes', 'run_1', 'agent_x');
+    const validHandoff = {
+      intent: 'Submit proposal for orchestrator review',
+      sandboxWorkDir: path.join(sandboxRootDir, 'work'),
+      proposalJson: path.join(sandboxRootDir, 'work', 'proposal', 'proposal.json'),
+      changedFiles: ['src/index.ts'],
+      inputs: ['task.md']
+    };
+
+    assert.doesNotThrow(() => assertValidHandoffEnvelope({ handoff: validHandoff }));
+    assert.doesNotThrow(() =>
+      assertHandoffPathsWithinScope({
+        handoff: validHandoff,
+        workspaceRoot,
+        sandboxRootDir
+      })
+    );
+
+    assert.throws(
+      () =>
+        assertValidHandoffEnvelope({
+          handoff: {
+            ...validHandoff,
+            changedFiles: []
+          }
+        }),
+      /changedFiles/
+    );
+
+    assert.throws(
+      () =>
+        assertHandoffPathsWithinScope({
+          handoff: {
+            ...validHandoff,
+            proposalJson: path.join(workspaceRoot, 'proposal.json')
+          },
+          workspaceRoot,
+          sandboxRootDir
+        }),
+      /sandboxWorkDir/
+    );
+
+    assert.throws(
+      () =>
+        assertHandoffPathsWithinScope({
+          handoff: {
+            ...validHandoff,
+            changedFiles: ['../escape.ts']
+          },
+          workspaceRoot,
+          sandboxRootDir
+        }),
+      /escapes workspace/
+    );
+  } finally {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+}
+
 async function testCliDetectorShape() {
   const { detectAllCliBackends } = require(path.join(root, 'extension', 'dist', 'services', 'cliDetector.js'));
   const backends = await detectAllCliBackends();
   assert.ok(Array.isArray(backends), 'backends should be array');
   assert.ok(backends.some((backend) => backend.id === 'auto'), 'auto backend must exist');
-  assert.ok(backends.some((backend) => backend.id === 'claude-code'), 'claude backend must exist');
+  assert.ok(
+    backends.some((backend) => backend.id === 'claude' || backend.id === 'claude-code'),
+    'claude backend must exist'
+  );
 }
 
 async function testFlowStoreRoundtrip() {
@@ -298,7 +440,15 @@ async function testFlowStoreRoundtrip() {
           source: 'n1',
           target: 'n1',
           type: 'interaction',
-          data: { termination: { type: 'max_rounds', rounds: 1 } }
+          data: {
+            patternId: 'self-test',
+            topology: 'p2p',
+            messageForm: 'structured_json',
+            sync: 'req_res',
+            termination: { type: 'max_rounds', rounds: 1 },
+            params: {},
+            observability: { logs: true, traces: false, retain_days: 7 }
+          }
         }
       ]
     });

@@ -1,0 +1,14 @@
+<svg viewBox="0 0 1200 800" width="1200" height="800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="promptBg" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#2fa184" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#181b20" stop-opacity="1"/>
+    </radialGradient>
+    <pattern id="faintDot" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <circle cx="20" cy="20" r="1.5" fill="#d7dce5" opacity="0.03"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="800" fill="#181b20"/>
+  <rect width="1200" height="800" fill="url(#promptBg)"/>
+  <rect width="1200" height="800" fill="url(#faintDot)"/>
+</svg>

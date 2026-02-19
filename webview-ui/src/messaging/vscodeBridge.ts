@@ -25,14 +25,16 @@ const pending = new Map<
 >();
 
 let initialized = false;
+let bridgeMessageHandler:
+  | ((event: MessageEvent<ExtensionToWebviewMessage>) => void)
+  | undefined;
 
 function ensureBridgeInitialized(): void {
   if (initialized) {
     return;
   }
   initialized = true;
-
-  window.addEventListener("message", (event: MessageEvent<ExtensionToWebviewMessage>) => {
+  bridgeMessageHandler = (event: MessageEvent<ExtensionToWebviewMessage>) => {
     const message = event.data;
     if (!isValidExtensionMessage(message)) {
       console.warn("Ignoring invalid extension message", message);
@@ -62,7 +64,8 @@ function ensureBridgeInitialized(): void {
     }
 
     listeners.forEach((listener) => listener(message));
-  });
+  };
+  window.addEventListener("message", bridgeMessageHandler);
 }
 
 export function postToExtension(message: WebviewToExtensionMessage): void {
@@ -115,6 +118,21 @@ export function onExtensionMessage(
   return () => {
     listeners.delete(handler);
   };
+}
+
+export function cleanupBridge(): void {
+  if (bridgeMessageHandler) {
+    window.removeEventListener("message", bridgeMessageHandler);
+    bridgeMessageHandler = undefined;
+  }
+
+  for (const [requestId, target] of pending.entries()) {
+    window.clearTimeout(target.timeoutId);
+    target.reject(new Error(`Bridge disposed before response: ${requestId}`));
+  }
+  pending.clear();
+  listeners.clear();
+  initialized = false;
 }
 
 function makeRequestId(): RequestId {

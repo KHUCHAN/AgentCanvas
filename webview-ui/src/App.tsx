@@ -1,20 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Edge, Node } from "reactflow";
 import GraphView from "./canvas/GraphView";
 import ScheduleView from "./canvas/ScheduleView";
-import { onExtensionMessage, postToExtension, requestToExtension } from "./messaging/vscodeBridge";
+import ErrorBoundary from "./ErrorBoundary";
+import {
+  cleanupBridge,
+  onExtensionMessage,
+  postToExtension,
+  requestToExtension
+} from "./messaging/vscodeBridge";
 import type {
   AgentRuntime,
   AgentRole,
+  CacheConfig,
+  CacheMetrics,
   CliBackend,
   CliBackendOverrides,
   DiscoverySnapshot,
   ExtensionToWebviewMessage,
   GeneratedAgentStructure,
+  InteractionEdgeData,
+  MemoryCommit,
+  MemoryItem,
+  MemoryNamespace,
+  MemoryQueryResult,
   Position,
   PromptHistoryEntry,
   RunEvent,
   RunSummary,
+  SessionContext,
   StudioEdge,
   StudioNode,
   SkillPackPreview,
@@ -29,10 +43,17 @@ import CommandBar from "./panels/CommandBar";
 import CommonRuleModal from "./panels/CommonRuleModal";
 import ImportPreviewModal from "./panels/ImportPreviewModal";
 import KeyboardHelpModal from "./panels/KeyboardHelpModal";
-import LeftSidebar from "./panels/LeftSidebar";
 import RightPanel from "./panels/RightPanel";
+import SettingsModal from "./panels/SettingsModal";
+import StatusBar from "./panels/StatusBar";
 import SkillWizardModal from "./panels/SkillWizardModal";
 import { getValidationCounts } from "./utils/validation";
+import logo from "./assets/agentcanvas_icon_28.png";
+import toastInfoIcon from "./assets/micro/agentcanvas_micro_toast_info.svg";
+import toastWarnIcon from "./assets/micro/agentcanvas_micro_toast_warn.svg";
+import toastErrorIcon from "./assets/micro/agentcanvas_micro_toast_error.svg";
+import BuildPrompt from "./views/BuildPrompt";
+import KanbanView from "./views/KanbanView";
 
 type ScheduleRunState = {
   tasks: Task[];
@@ -42,16 +63,53 @@ type ScheduleRunState = {
   anchorWallMs: number;
 };
 
+type ScheduleViewState = {
+  tasks: Task[];
+  nowMs: number;
+};
+
+const DEFAULT_CACHE_CONFIG: CacheConfig = {
+  retention: "long",
+  contextPruning: {
+    mode: "cache-ttl",
+    ttlSeconds: 3600
+  },
+  diagnostics: {
+    enabled: false,
+    logPath: ".agentcanvas/logs/cache-trace.jsonl"
+  },
+  modelRouting: {
+    heartbeat: "haiku-4.5",
+    cron: "haiku-4.5",
+    default: "sonnet-4.5"
+  },
+  contextThreshold: 180000
+};
+
+const EMPTY_CACHE_METRICS: CacheMetrics = {
+  cacheRead: 0,
+  cacheWrite: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cost: 0,
+  savedCost: 0,
+  model: "sonnet-4.5",
+  hitRate: 0
+};
+
 export default function App() {
   const [snapshot, setSnapshot] = useState<DiscoverySnapshot>();
   const [selectedNode, setSelectedNode] = useState<Node>();
   const [selectedEdge, setSelectedEdge] = useState<Edge>();
-  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "prompt" | "run">("library");
-  const [canvasMode, setCanvasMode] = useState<"graph" | "schedule">("graph");
+  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "prompt" | "run" | "memory">("library");
+  const [canvasMode, setCanvasMode] = useState<"kanban" | "graph" | "schedule">("kanban");
+  const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [hiddenNodeIds, setHiddenNodeIds] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ level: "info" | "warning" | "error"; message: string }>();
   const [commandBarOpen, setCommandBarOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [forceBuildPrompt, setForceBuildPrompt] = useState(false);
   const [importPreview, setImportPreview] = useState<SkillPackPreview>();
   const [commonRuleModalOpen, setCommonRuleModalOpen] = useState(false);
   const [skillWizardOpen, setSkillWizardOpen] = useState(false);
@@ -81,12 +139,25 @@ export default function App() {
   const [activeFlowName, setActiveFlowName] = useState("default");
   const [runHistory, setRunHistory] = useState<RunSummary[]>([]);
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [backendOverrides, setBackendOverridesState] = useState<CliBackendOverrides>({});
+  const [defaultBackendId, setDefaultBackendId] = useState<CliBackend["id"]>("auto");
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [activeRunId, setActiveRunId] = useState<string>();
   const [scheduleRunId, setScheduleRunId] = useState<string>();
-  const [scheduleTasks, setScheduleTasks] = useState<Task[]>([]);
+  const [scheduleViewState, setScheduleViewState] = useState<ScheduleViewState>({
+    tasks: [],
+    nowMs: 0
+  });
   const [selectedScheduleTaskId, setSelectedScheduleTaskId] = useState<string>();
-  const [scheduleNowMs, setScheduleNowMs] = useState(0);
+  const [cacheConfig, setCacheConfig] = useState<CacheConfig>(DEFAULT_CACHE_CONFIG);
+  const [cacheMetrics, setCacheMetrics] = useState<CacheMetrics>(EMPTY_CACHE_METRICS);
+  const [memoryItems, setMemoryItems] = useState<MemoryItem[]>([]);
+  const [memoryCommits, setMemoryCommits] = useState<MemoryCommit[]>([]);
+  const [memoryQueryResult, setMemoryQueryResult] = useState<MemoryQueryResult>();
+  const [contextThresholdWarning, setContextThresholdWarning] = useState<{
+    current: number;
+    threshold: number;
+  }>();
   const scheduleOriginNowRef = useRef(0);
   const scheduleAnchorNowRef = useRef(0);
   const scheduleAnchorWallMsRef = useRef(Date.now());
@@ -97,7 +168,22 @@ export default function App() {
     scheduleRunIdRef.current = scheduleRunId;
   }, [scheduleRunId]);
 
-  const applyScheduleEvent = (event: TaskEvent) => {
+  const showErrorToast = useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    setToast({ level: "error", message });
+  }, []);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setToast(undefined);
+    }, 3600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  const applyScheduleEvent = useCallback((event: TaskEvent) => {
     const cache = scheduleRunStateRef.current;
     const previous = cache.get(event.runId);
     const originNowMs = previous?.originNowMs ?? event.nowMs;
@@ -125,12 +211,14 @@ export default function App() {
     scheduleOriginNowRef.current = nextState.originNowMs;
     scheduleAnchorNowRef.current = nextState.anchorNowMs;
     scheduleAnchorWallMsRef.current = nextState.anchorWallMs;
-    setScheduleNowMs(nextState.nowMs);
-    setScheduleTasks(nextState.tasks);
+    setScheduleViewState({
+      tasks: nextState.tasks,
+      nowMs: nextState.nowMs
+    });
     if (event.type === "task_deleted") {
       setSelectedScheduleTaskId((current) => (current === event.taskId ? undefined : current));
     }
-  };
+  }, []);
 
   useEffect(() => {
     const dispose = onExtensionMessage((message) => {
@@ -147,50 +235,35 @@ export default function App() {
         setImportPreview,
         setPromptBackends,
         setPromptHistory,
-        setGenerationProgress
+        setGenerationProgress,
+        setRunEvents,
+        setCacheMetrics,
+        setMemoryItems,
+        setMemoryQueryResult,
+        setContextThresholdWarning
       });
     });
 
     postToExtension({ type: "READY" });
-    void requestToExtension({ type: "DETECT_CLI_BACKENDS" }).catch(showErrorToast);
-    void requestToExtension({ type: "GET_PROMPT_HISTORY" }).catch(showErrorToast);
-    void requestToExtension<{ runs: RunSummary[] }>({
-      type: "LIST_RUNS",
-      payload: { flowName: activeFlowName }
-    })
-      .then((result) => setRunHistory(result.runs ?? []))
-      .catch(showErrorToast);
-    return dispose;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      dispose();
+      cleanupBridge();
+    };
+  }, [applyScheduleEvent]);
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const isTextInput =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.getAttribute("contenteditable") === "true";
-
-      if (isTextInput) {
-        return;
-      }
-
-      if (event.shiftKey && event.key === "?") {
-        event.preventDefault();
-        setKeyboardHelpOpen(true);
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    void requestToExtension({ type: "DETECT_CLI_BACKENDS" }).catch(showErrorToast);
+    void requestToExtension({ type: "GET_PROMPT_HISTORY" }).catch(showErrorToast);
+    void requestToExtension<{ config: CacheConfig }>({ type: "GET_CACHE_CONFIG" })
+      .then((result) => setCacheConfig(result.config ?? DEFAULT_CACHE_CONFIG))
+      .catch(showErrorToast);
+  }, [showErrorToast]);
 
   useEffect(() => {
     void loadInteractionPatternIndex()
       .then((items) => setInteractionPatterns(items))
       .catch(showErrorToast);
-  }, []);
+  }, [showErrorToast]);
 
   useEffect(() => {
     if (!scheduleRunId) {
@@ -204,7 +277,10 @@ export default function App() {
       }
       const elapsedMs = Date.now() - scheduleAnchorWallMsRef.current;
       const nextNowMs = Math.max(0, scheduleAnchorNowRef.current + elapsedMs);
-      setScheduleNowMs(nextNowMs);
+      setScheduleViewState((current) => ({
+        ...current,
+        nowMs: nextNowMs
+      }));
       const runState = scheduleRunStateRef.current.get(scheduleRunId);
       if (runState) {
         runState.nowMs = nextNowMs;
@@ -225,23 +301,30 @@ export default function App() {
     return new Date(snapshot.generatedAt).toLocaleTimeString();
   }, [snapshot?.generatedAt]);
 
-  const composedSnapshot = useMemo(() => {
+  const baseSnapshotMaps = useMemo(() => {
     if (!snapshot) {
       return undefined;
     }
+    return {
+      nodeMap: new Map<string, StudioNode>(snapshot.nodes.map((node) => [node.id, node])),
+      edgeMap: new Map<string, StudioEdge>(snapshot.edges.map((edge) => [edge.id, edge]))
+    };
+  }, [snapshot]);
 
-    const nodeMap = new Map<string, StudioNode>();
-    for (const node of snapshot.nodes) {
-      nodeMap.set(node.id, node);
+  const composedSnapshot = useMemo(() => {
+    if (!snapshot || !baseSnapshotMaps) {
+      return undefined;
     }
+    if (patternNodes.length === 0 && patternEdges.length === 0) {
+      return snapshot;
+    }
+
+    const nodeMap = new Map(baseSnapshotMaps.nodeMap);
     for (const node of patternNodes) {
       nodeMap.set(node.id, node);
     }
 
-    const edgeMap = new Map<string, StudioEdge>();
-    for (const edge of snapshot.edges) {
-      edgeMap.set(edge.id, edge);
-    }
+    const edgeMap = new Map(baseSnapshotMaps.edgeMap);
     for (const edge of patternEdges) {
       edgeMap.set(edge.id, edge);
     }
@@ -251,7 +334,52 @@ export default function App() {
       nodes: [...nodeMap.values()],
       edges: [...edgeMap.values()]
     };
-  }, [patternEdges, patternNodes, snapshot]);
+  }, [baseSnapshotMaps, patternEdges, patternNodes, snapshot]);
+
+  const graphSnapshot = useMemo(() => {
+    if (!composedSnapshot) {
+      return undefined;
+    }
+    const baseTypes = new Set(["agent", "commonRules", "system", "provider", "note"]);
+    const nodes = composedSnapshot.nodes;
+    const edges = composedSnapshot.edges;
+    if (!expandedAgentId) {
+      const allowed = nodes.filter((node) => baseTypes.has(node.type));
+      const allowedIds = new Set(allowed.map((node) => node.id));
+      return {
+        ...composedSnapshot,
+        nodes: allowed,
+        edges: edges.filter((edge) => allowedIds.has(edge.source) && allowedIds.has(edge.target))
+      };
+    }
+
+    const linkedIds = new Set<string>([expandedAgentId]);
+    for (const edge of edges) {
+      if (edge.source === expandedAgentId) {
+        linkedIds.add(edge.target);
+      }
+      if (edge.target === expandedAgentId) {
+        linkedIds.add(edge.source);
+      }
+    }
+
+    const allowed = nodes.filter((node) => {
+      if (baseTypes.has(node.type)) {
+        return true;
+      }
+      if (linkedIds.has(node.id)) {
+        return true;
+      }
+      const owner = String((node.data as Record<string, unknown> | undefined)?.ownerAgentId ?? "");
+      return owner === expandedAgentId;
+    });
+    const allowedIds = new Set(allowed.map((node) => node.id));
+    return {
+      ...composedSnapshot,
+      nodes: allowed,
+      edges: edges.filter((edge) => allowedIds.has(edge.source) && allowedIds.has(edge.target))
+    };
+  }, [composedSnapshot, expandedAgentId]);
 
   const summary = useMemo(() => {
     const skills = snapshot?.skills ?? [];
@@ -270,10 +398,73 @@ export default function App() {
     };
   }, [snapshot?.ruleDocs.length, snapshot?.skills]);
 
+  const focusLabel = useMemo(() => {
+    if (selectedNode?.id) {
+      return `Node:${selectedNode.id}`;
+    }
+    if (selectedEdge?.id) {
+      return `Edge:${selectedEdge.id}`;
+    }
+    if (selectedScheduleTaskId) {
+      return `Task:${selectedScheduleTaskId}`;
+    }
+    return `${canvasMode}/${panelMode}`;
+  }, [canvasMode, panelMode, selectedEdge?.id, selectedNode?.id, selectedScheduleTaskId]);
+
   const selectedScheduleTask = useMemo(
-    () => scheduleTasks.find((task) => task.id === selectedScheduleTaskId),
-    [scheduleTasks, selectedScheduleTaskId]
+    () => scheduleViewState.tasks.find((task) => task.id === selectedScheduleTaskId),
+    [scheduleViewState.tasks, selectedScheduleTaskId]
   );
+
+  const hasTeamReady = useMemo(() => {
+    const customAgents =
+      snapshot?.agents.filter((agent) => agent.id.startsWith("custom:") || agent.providerId === "custom").length ??
+      0;
+    return (
+      customAgents > 0 ||
+      patternNodes.length > 0 ||
+      runHistory.length > 0 ||
+      promptHistory.some((item) => item.applied) ||
+      (snapshot?.agents.length ?? 0) > 2
+    );
+  }, [patternNodes.length, promptHistory, runHistory.length, snapshot?.agents]);
+
+  const showBuildPrompt = forceBuildPrompt || !hasTeamReady;
+
+  const runSummary = useMemo(() => {
+    const total = scheduleViewState.tasks.length;
+    const done = scheduleViewState.tasks.filter((task) => task.status === "done" || task.status === "canceled").length;
+    const failed = scheduleViewState.tasks.filter((task) => task.status === "failed").length;
+    return { total, done, failed };
+  }, [scheduleViewState.tasks]);
+
+  const contextUsed = useMemo(() => {
+    const tracked = cacheMetrics.inputTokens + cacheMetrics.cacheRead + cacheMetrics.cacheWrite;
+    return Math.max(tracked, contextThresholdWarning?.current ?? 0);
+  }, [
+    cacheMetrics.cacheRead,
+    cacheMetrics.cacheWrite,
+    cacheMetrics.inputTokens,
+    contextThresholdWarning?.current
+  ]);
+
+  const contextState = useMemo(() => {
+    if (contextUsed >= cacheConfig.contextThreshold) {
+      return "danger";
+    }
+    if (contextUsed >= Math.min(150000, cacheConfig.contextThreshold)) {
+      return "warn";
+    }
+    return "ok";
+  }, [cacheConfig.contextThreshold, contextUsed]);
+
+  const cacheSavedRate = useMemo(() => {
+    const baseline = cacheMetrics.cost + cacheMetrics.savedCost;
+    if (baseline <= 0) {
+      return 0;
+    }
+    return Math.max(0, Math.min(1, cacheMetrics.savedCost / baseline));
+  }, [cacheMetrics.cost, cacheMetrics.savedCost]);
 
   const skillBaseOptions = useMemo(() => {
     const workspaceRoot = snapshot?.agent.workspaceRoot;
@@ -400,15 +591,10 @@ export default function App() {
     }
   };
 
-  const showErrorToast = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    setToast({ level: "error", message });
-  };
-
-  const refreshDiscovery = () => {
+  const refreshDiscovery = useCallback(() => {
     postToExtension({ type: "REFRESH" });
     setHiddenNodeIds(new Set());
-  };
+  }, []);
 
   const runValidationAll = () => {
     setBusy(true);
@@ -605,6 +791,8 @@ export default function App() {
         payload
       });
       setAgentCreationOpen(false);
+      setForceBuildPrompt(false);
+      setCanvasMode("kanban");
       setPanelMode("inspector");
       setPanelOpen(true);
     } catch (error) {
@@ -694,6 +882,8 @@ export default function App() {
         payload
       });
       setGeneratedPreview(undefined);
+      setForceBuildPrompt(false);
+      setCanvasMode("kanban");
       setPanelMode("inspector");
       setPanelOpen(true);
     } catch (error) {
@@ -729,6 +919,8 @@ export default function App() {
         },
         120_000
       );
+      setForceBuildPrompt(false);
+      setCanvasMode("kanban");
       setPanelMode("inspector");
       setPanelOpen(true);
     } catch (error) {
@@ -738,6 +930,120 @@ export default function App() {
       setBusy(false);
     }
   };
+
+  const refreshMemory = useCallback(async () => {
+    setBusy(true);
+    try {
+      const [itemsResult, commitsResult] = await Promise.all([
+        requestToExtension<{ items: MemoryItem[] }>({
+          type: "GET_MEMORY_ITEMS",
+          payload: { limit: 250 }
+        }),
+        requestToExtension<{ commits: MemoryCommit[] }>({
+          type: "GET_MEMORY_COMMITS",
+          payload: { limit: 120 }
+        })
+      ]);
+      setMemoryItems(itemsResult.items ?? []);
+      setMemoryCommits(commitsResult.commits ?? []);
+    } catch (error) {
+      showErrorToast(error);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }, [showErrorToast]);
+
+  const searchMemory = useCallback(
+    async (query: string, namespaces?: MemoryNamespace[]) => {
+      setBusy(true);
+      try {
+        const result = await requestToExtension<{ result: MemoryQueryResult }>({
+          type: "SEARCH_MEMORY",
+          payload: {
+            query: query.trim(),
+            namespaces,
+            budgetTokens: 1200
+          }
+        });
+        setMemoryQueryResult(result.result);
+      } catch (error) {
+        showErrorToast(error);
+        throw error;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [showErrorToast]
+  );
+
+  const addMemoryItem = useCallback(
+    async (item: Omit<MemoryItem, "id" | "createdAt" | "updatedAt">) => {
+      setBusy(true);
+      try {
+        await requestToExtension({
+          type: "ADD_MEMORY_ITEM",
+          payload: { item }
+        });
+        await refreshMemory();
+      } catch (error) {
+        showErrorToast(error);
+        throw error;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshMemory, showErrorToast]
+  );
+
+  const supersedeMemory = useCallback(
+    async (oldItemId: string, newContent: string, reason: string) => {
+      setBusy(true);
+      try {
+        await requestToExtension({
+          type: "SUPERSEDE_MEMORY",
+          payload: { oldItemId, newContent, reason }
+        });
+        await refreshMemory();
+      } catch (error) {
+        showErrorToast(error);
+        throw error;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshMemory, showErrorToast]
+  );
+
+  const checkoutMemory = useCallback(
+    async (commitId: string) => {
+      setBusy(true);
+      try {
+        await requestToExtension({
+          type: "MEMORY_CHECKOUT",
+          payload: { commitId }
+        });
+        await refreshDiscovery();
+        await refreshMemory();
+      } catch (error) {
+        showErrorToast(error);
+        throw error;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshDiscovery, refreshMemory, showErrorToast]
+  );
+
+  useEffect(() => {
+    if (panelMode !== "memory" || !panelOpen) {
+      return;
+    }
+    if (memoryItems.length > 0 || memoryCommits.length > 0) {
+      return;
+    }
+    void refreshMemory().catch(() => undefined);
+  }, [memoryCommits.length, memoryItems.length, panelMode, panelOpen, refreshMemory]);
 
   const insertInteractionPattern = async (patternId: string, anchor?: Position) => {
     setBusy(true);
@@ -813,15 +1119,24 @@ export default function App() {
 
       setPatternNodes((prev) => [...prev, ...createdNodes]);
       setPatternEdges((prev) => [...prev, ...createdEdges]);
+      postToExtension({
+        type: "INSERT_PATTERN",
+        payload: {
+          patternId,
+          anchor: { x: anchorX, y: anchorY }
+        }
+      });
       for (const edge of createdEdges) {
+        const interactionData = edge.data as InteractionEdgeData | undefined;
+        if (!interactionData) {
+          continue;
+        }
         postToExtension({
-          type: "LOG_INTERACTION_EVENT",
+          type: "CONFIGURE_INTERACTION_EDGE",
           payload: {
-            flowName: activeFlowName,
-            interactionId: String((edge.data as Record<string, unknown> | undefined)?.patternId ?? patternId),
             edgeId: edge.id,
-            event: "configured",
-            data: edge.data as Record<string, unknown> | undefined
+            label: edge.label,
+            data: interactionData
           }
         });
       }
@@ -852,21 +1167,21 @@ export default function App() {
             }
           }
           : edge
-      )
+        )
     );
-    postToExtension({
-      type: "LOG_INTERACTION_EVENT",
-      payload: {
-        flowName: activeFlowName,
-        interactionId: String(update.data?.patternId ?? "interaction"),
-        edgeId,
-        event: "updated",
-        data: update.data
-      }
-    });
+    if (update.data && typeof (update.data as { termination?: unknown }).termination === "object") {
+      postToExtension({
+        type: "CONFIGURE_INTERACTION_EDGE",
+        payload: {
+          edgeId,
+          label: update.label,
+          data: update.data as InteractionEdgeData
+        }
+      });
+    }
   };
 
-  const saveFlow = async () => {
+  const saveFlow = useCallback(async () => {
     setBusy(true);
     try {
       await requestToExtension({
@@ -884,9 +1199,9 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  };
+  }, [activeFlowName, patternEdges, patternNodes, showErrorToast]);
 
-  const loadFlow = async () => {
+  const loadFlow = useCallback(async () => {
     setBusy(true);
     try {
       const listResult = await requestToExtension<{ flows: string[] }>({ type: "LIST_FLOWS" });
@@ -914,7 +1229,7 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  };
+  }, [activeFlowName, showErrorToast]);
 
   const subscribeScheduleRun = async (runId: string) => {
     if (!runId) {
@@ -936,11 +1251,15 @@ export default function App() {
       scheduleOriginNowRef.current = cached.originNowMs;
       scheduleAnchorNowRef.current = cached.anchorNowMs;
       scheduleAnchorWallMsRef.current = cached.anchorWallMs;
-      setScheduleTasks(cached.tasks);
-      setScheduleNowMs(cached.nowMs);
+      setScheduleViewState({
+        tasks: cached.tasks,
+        nowMs: cached.nowMs
+      });
     } else {
-      setScheduleTasks([]);
-      setScheduleNowMs(0);
+      setScheduleViewState({
+        tasks: [],
+        nowMs: 0
+      });
     }
 
     await requestToExtension({
@@ -956,23 +1275,30 @@ export default function App() {
     }
   };
 
-  const refreshRunHistory = async () => {
+  const refreshRunHistory = useCallback(async () => {
     const result = await requestToExtension<{ runs: RunSummary[] }>({
       type: "LIST_RUNS",
       payload: { flowName: activeFlowName }
     });
     setRunHistory(result.runs ?? []);
-  };
+  }, [activeFlowName]);
 
   useEffect(() => {
-    void refreshRunHistory().catch(showErrorToast);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFlowName]);
+    if (promptBackends.length === 0) {
+      return;
+    }
+    if (!promptBackends.some((backend) => backend.id === defaultBackendId)) {
+      setDefaultBackendId(promptBackends[0].id);
+    }
+  }, [defaultBackendId, promptBackends]);
 
   const runFlowFromPanel = async (payload: {
     flowName: string;
     backendId: CliBackend["id"];
     usePinnedOutputs: boolean;
+    session?: SessionContext;
+    runName?: string;
+    tags?: string[];
   }) => {
     setBusy(true);
     try {
@@ -985,12 +1311,17 @@ export default function App() {
         payload: {
           flowName: payload.flowName,
           backendId: payload.backendId,
-          usePinnedOutputs: payload.usePinnedOutputs
+          usePinnedOutputs: payload.usePinnedOutputs,
+          session: payload.session,
+          runName: payload.runName,
+          tags: payload.tags
         }
       });
+      setActiveFlowName(result.flowName);
       setActiveRunId(result.runId);
       setSelectedRunId(result.runId);
-      setCanvasMode("schedule");
+      setCanvasMode("kanban");
+      setForceBuildPrompt(false);
       setPanelMode("run");
       setPanelOpen(true);
       await subscribeScheduleRun(result.runId);
@@ -1008,6 +1339,7 @@ export default function App() {
     nodeId: string;
     backendId: CliBackend["id"];
     usePinnedOutput: boolean;
+    session?: SessionContext;
   }) => {
     setBusy(true);
     try {
@@ -1019,9 +1351,10 @@ export default function App() {
         type: "RUN_NODE",
         payload
       });
+      setActiveFlowName(result.flowName);
       setActiveRunId(result.runId);
       setSelectedRunId(result.runId);
-      setCanvasMode("schedule");
+      setCanvasMode("kanban");
       setPanelMode("run");
       setPanelOpen(true);
       await subscribeScheduleRun(result.runId);
@@ -1050,6 +1383,7 @@ export default function App() {
     setSelectedRunId(runId);
     const selectedRun = runHistory.find((run) => run.runId === runId);
     const flowName = selectedRun?.flow ?? activeFlowName;
+    setActiveFlowName(flowName);
     await subscribeScheduleRun(runId);
     const loaded = await requestToExtension<{ events: RunEvent[] }>({
       type: "LOAD_RUN",
@@ -1059,7 +1393,7 @@ export default function App() {
       }
     });
     setRunEvents(loaded.events ?? []);
-    setCanvasMode("schedule");
+    setCanvasMode("kanban");
   };
 
   const pinOutput = async (flowName: string, nodeId: string, output: unknown) => {
@@ -1083,38 +1417,223 @@ export default function App() {
       type: "SET_BACKEND_OVERRIDES",
       payload: { overrides }
     });
+    setBackendOverridesState(overrides);
     await requestToExtension({ type: "DETECT_CLI_BACKENDS" });
     setToast({ level: "info", message: "Backend overrides updated" });
   };
 
-  const moveScheduleTask = (taskId: string, forceStartMs: number, forceAgentId?: string) => {
-    if (!scheduleRunId) {
+  const setDefaultBackend = async (backendId: CliBackend["id"]) => {
+    await requestToExtension({
+      type: "SET_DEFAULT_BACKEND",
+      payload: { backendId }
+    });
+    setDefaultBackendId(backendId);
+    setToast({ level: "info", message: `Workspace default backend set: ${backendId}` });
+  };
+
+  const testBackendFromPanel = async (backendId: CliBackend["id"]) => {
+    const result = await requestToExtension<{
+      result: {
+        backendId: CliBackend["id"];
+        ok: boolean;
+        durationMs: number;
+        model?: string;
+        message: string;
+        outputPreview?: string;
+      };
+    }>({
+      type: "TEST_BACKEND",
+      payload: { backendId }
+    });
+    const detail = result.result;
+    setToast({
+      level: detail.ok ? "info" : "warning",
+      message: detail.ok
+        ? `${detail.backendId}: ${Math.round(detail.durationMs / 10) / 100}s${detail.model ? ` · ${detail.model}` : ""}`
+        : `${detail.backendId}: ${detail.message}`
+    });
+    return detail;
+  };
+
+  const replayRunFromPanel = async (payload: { runId: string; modifiedPrompts?: Record<string, string> }) => {
+    setBusy(true);
+    try {
+      const result = await requestToExtension<{
+        runId: string;
+        flowName: string;
+      }>({
+        type: "REPLAY_RUN",
+        payload
+      });
+      setActiveFlowName(result.flowName);
+      setActiveRunId(result.runId);
+      setSelectedRunId(result.runId);
+      setCanvasMode("kanban");
+      await subscribeScheduleRun(result.runId);
+      await refreshRunHistory();
+      await selectRun(result.runId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openRunLog = (runId: string, flowName: string) => {
+    const workspaceRoot = snapshot?.agent.workspaceRoot;
+    if (!workspaceRoot) {
       return;
     }
+    const sanitizedFlow = flowName
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "default";
+    const runLogPath = `${workspaceRoot}/.agentcanvas/runs/${sanitizedFlow}/${runId}.jsonl`;
     postToExtension({
-      type: "TASK_MOVE",
+      type: "OPEN_FILE",
       payload: {
-        runId: scheduleRunId,
-        taskId,
-        forceStartMs,
-        forceAgentId
+        path: runLogPath
       }
     });
   };
 
-  const pinScheduleTask = (taskId: string, pinned: boolean) => {
-    if (!scheduleRunId) {
+  const moveScheduleTask = (taskId: string, forceStartMs: number, forceAgentId?: string) => {
+    const runId = scheduleRunIdRef.current;
+    if (!runId) {
       return;
     }
-    postToExtension({
+    void requestToExtension({
+      type: "TASK_MOVE",
+      payload: {
+        runId,
+        taskId,
+        forceStartMs,
+        forceAgentId
+      }
+    }).catch(showErrorToast);
+  };
+
+  const pinScheduleTask = (taskId: string, pinned: boolean) => {
+    const runId = scheduleRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    void requestToExtension({
       type: "TASK_PIN",
       payload: {
-        runId: scheduleRunId,
+        runId,
         taskId,
         pinned
       }
-    });
+    }).catch(showErrorToast);
   };
+
+  const setScheduleTaskStatus = (taskId: string, status: Task["status"]) => {
+    const runId = scheduleRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    void requestToExtension({
+      type: "TASK_SET_STATUS",
+      payload: {
+        runId,
+        taskId,
+        status
+      }
+    }).catch(showErrorToast);
+  };
+
+  const refreshCacheMetrics = useCallback(async () => {
+    const result = await requestToExtension<{ metrics: CacheMetrics }>({
+      type: "GET_CACHE_METRICS",
+      payload: { flowName: activeFlowName }
+    });
+    if (result.metrics) {
+      setCacheMetrics(result.metrics);
+    }
+  }, [activeFlowName]);
+
+  useEffect(() => {
+    void refreshRunHistory().catch(showErrorToast);
+  }, [refreshRunHistory, showErrorToast]);
+
+  useEffect(() => {
+    void refreshCacheMetrics().catch(showErrorToast);
+  }, [refreshCacheMetrics, showErrorToast]);
+
+  const resetCacheMetrics = async () => {
+    const result = await requestToExtension<{ metrics?: CacheMetrics }>({
+      type: "RESET_CACHE_METRICS",
+      payload: { flowName: activeFlowName }
+    });
+    if (result.metrics) {
+      setCacheMetrics(result.metrics);
+    } else {
+      setCacheMetrics(EMPTY_CACHE_METRICS);
+    }
+  };
+
+  const saveCacheConfig = async (nextConfig: CacheConfig) => {
+    await requestToExtension({
+      type: "UPDATE_CACHE_CONFIG",
+      payload: nextConfig
+    });
+    setCacheConfig(nextConfig);
+    setToast({ level: "info", message: "Cache configuration saved" });
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTextInput =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.getAttribute("contenteditable") === "true";
+      const hasModalOpen = Boolean(document.querySelector(".command-overlay"));
+
+      if (isTextInput || hasModalOpen) {
+        return;
+      }
+
+      if (event.shiftKey && event.key === "?") {
+        event.preventDefault();
+        setKeyboardHelpOpen(true);
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandBarOpen(true);
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key === ",") {
+        event.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        setSaveSignal((value) => value + 1);
+        void saveFlow().catch(showErrorToast);
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
+        event.preventDefault();
+        void loadFlow().catch(showErrorToast);
+        return;
+      }
+
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "r") {
+        event.preventDefault();
+        refreshDiscovery();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [loadFlow, refreshDiscovery, saveFlow, showErrorToast]);
 
   const commandItems = [
     {
@@ -1125,12 +1644,66 @@ export default function App() {
       run: refreshDiscovery
     },
     {
-      id: "node-library",
-      title: "Open node library",
-      subtitle: "Switch to library panel",
-      shortcut: "Ctrl/Cmd+L",
+      id: "build-team",
+      title: "Build team prompt",
+      subtitle: "Open prompt-first build screen",
+      run: () => setForceBuildPrompt(true)
+    },
+    {
+      id: "view-kanban",
+      title: "Switch to Kanban",
+      subtitle: "Track progress in board view",
       run: () => {
-        setPanelMode("library");
+        setCanvasMode("kanban");
+        setForceBuildPrompt(false);
+      }
+    },
+    {
+      id: "view-graph",
+      title: "Switch to Graph",
+      subtitle: "Inspect canvas relationships",
+      run: () => {
+        setCanvasMode("graph");
+        setForceBuildPrompt(false);
+      }
+    },
+    {
+      id: "view-schedule",
+      title: "Switch to Schedule",
+      subtitle: "Inspect timeline view",
+      run: () => {
+        setCanvasMode("schedule");
+        setForceBuildPrompt(false);
+      }
+    },
+    {
+      id: "toggle-expand",
+      title: expandedAgentId ? "Switch to overview graph" : "Expand selected agent",
+      subtitle: "Toggle graph focus mode",
+      run: () => {
+        if (expandedAgentId) {
+          setExpandedAgentId(null);
+          return;
+        }
+        const selectedAgent =
+          selectedNode?.type === "agent"
+            ? selectedNode.id
+            : snapshot?.agents[0]?.id ?? null;
+        setExpandedAgentId(selectedAgent);
+      }
+    },
+    {
+      id: "toggle-right-panel",
+      title: panelOpen ? "Hide right panel" : "Show right panel",
+      subtitle: "Toggle inspector panel visibility",
+      run: () => setPanelOpen((open) => !open)
+    },
+    {
+      id: "panel-memory",
+      title: "Open memory panel",
+      subtitle: "Inspect shared memory and commits",
+      run: () => {
+        setPanelMode("memory");
         setPanelOpen(true);
       }
     },
@@ -1154,33 +1727,17 @@ export default function App() {
       run: () => setAgentCreationOpen(true)
     },
     {
-      id: "prompt-panel",
-      title: "Open AI prompt panel",
-      subtitle: "Generate agent team from natural language",
-      run: () => {
-        setPanelMode("prompt");
-        setPanelOpen(true);
-      }
-    },
-    {
-      id: "run-panel",
-      title: "Open run panel",
-      subtitle: "Execute flow and inspect run history",
-      run: () => {
-        setPanelMode("run");
-        setPanelOpen(true);
-      }
-    },
-    {
       id: "save-flow",
       title: "Save interaction flow",
       subtitle: "Write .agentcanvas/flows/<name>.yaml",
+      shortcut: "Cmd/Ctrl+S",
       run: () => void saveFlow()
     },
     {
       id: "load-flow",
       title: "Load interaction flow",
       subtitle: "Load .agentcanvas/flows/<name>.yaml",
+      shortcut: "Cmd/Ctrl+O",
       run: () => void loadFlow()
     },
     {
@@ -1236,209 +1793,347 @@ export default function App() {
       title: "Add sticky note",
       subtitle: "Use Shift+S on canvas",
       run: () => setToast({ level: "info", message: "Focus canvas and press Shift+S" })
+    },
+    {
+      id: "open-settings",
+      title: "Open settings modal",
+      subtitle: "Manage providers, ops, packs and shortcuts",
+      shortcut: "Cmd/Ctrl+,",
+      run: () => setSettingsOpen(true)
+    },
+    {
+      id: "cache-status",
+      title: "Cache status",
+      subtitle: "Refresh cache metrics for current flow",
+      run: () => void refreshCacheMetrics()
+    },
+    {
+      id: "cache-reset",
+      title: "Reset cache metrics",
+      subtitle: "Clear cache metrics for current flow",
+      run: () => void resetCacheMetrics()
     }
   ];
 
   return (
     <div className="studio-shell">
-      <aside className="left-sidebar">
-        <LeftSidebar snapshot={snapshot} />
-      </aside>
-
       <section className="main-section">
         <header className="top-bar">
-          <div className="top-meta">
-            <div className="top-title">{snapshot?.agent.name ?? "Local Agent"}</div>
+          <div className="top-brand">
+            <button
+              type="button"
+              className="brand-home-button"
+              onClick={() => {
+                setForceBuildPrompt(true);
+                setCanvasMode("kanban");
+              }}
+            >
+              <img src={logo} className="brand-home-logo" alt="" />
+              <span className="brand-home-text">AgentCanvas</span>
+            </button>
             <div className="top-subtitle">Last refresh: {generatedAtText}</div>
           </div>
 
           <div className="top-actions">
-            <button title="Create new skill" onClick={() => setSkillWizardOpen(true)}>New Skill</button>
-            <button title="Create new agent" onClick={() => setAgentCreationOpen(true)}>New Agent</button>
-            <button title="Save interaction flow" onClick={() => void saveFlow()}>Save Flow</button>
-            <button title="Load interaction flow" onClick={() => void loadFlow()}>Load Flow</button>
-            <button title="Refresh discovery (R)" onClick={refreshDiscovery}>Refresh</button>
-            <button
-              title="Run panel"
-              onClick={() => {
-                setPanelMode("run");
-                setPanelOpen(true);
-              }}
-            >
-              Run
-            </button>
-            <button
-              className={canvasMode === "graph" ? "active-toggle" : ""}
-              onClick={() => setCanvasMode("graph")}
-              title="Graph canvas"
-            >
-              Graph
-            </button>
-            <button
-              className={canvasMode === "schedule" ? "active-toggle" : ""}
-              onClick={() => setCanvasMode("schedule")}
-              title="Schedule canvas"
-            >
-              Schedule
-            </button>
-            <button title="Export all skills" onClick={() => exportSkills([])}>Export Pack</button>
-            <button title="Import skill pack" onClick={requestImportPreview}>Import Pack</button>
-            <button title="Validate all skills" onClick={runValidationAll}>Validate</button>
-            <button onClick={() => setCommonRuleModalOpen(true)}>Common Rule</button>
-            <button onClick={createCommonRuleDocs}>Ops Docs</button>
-            <button title="Keyboard shortcuts (Shift+?)" onClick={() => setKeyboardHelpOpen(true)}>Shortcuts</button>
-            <button
-              onClick={() => {
-                setPanelMode("prompt");
-                setPanelOpen(true);
-              }}
-            >
-              AI Prompt
-            </button>
-            <button onClick={() => setSaveSignal((current) => current + 1)}>Save</button>
-            <button title="Open command bar (Ctrl/Cmd+K)" onClick={() => setCommandBarOpen(true)}>Command Bar</button>
-            <button onClick={() => setPanelOpen((open) => !open)}>
-              {panelOpen ? "Hide Panel" : "Show Panel"}
-            </button>
-            {busy && <button disabled>Working...</button>}
+            {!showBuildPrompt && (
+              <div className="view-toggle" role="tablist" aria-label="Panel mode">
+                <button
+                  type="button"
+                  className={panelMode === "library" ? "active-toggle" : ""}
+                  title="Node Library"
+                  onClick={() => {
+                    setPanelMode("library");
+                    setPanelOpen(true);
+                  }}
+                >
+                  Node Library
+                </button>
+                <button
+                  type="button"
+                  className={panelMode === "inspector" ? "active-toggle" : ""}
+                  title="Inspector"
+                  onClick={() => {
+                    setPanelMode("inspector");
+                    setPanelOpen(true);
+                  }}
+                >
+                  Inspector
+                </button>
+                <button
+                  type="button"
+                  className={panelMode === "prompt" ? "active-toggle" : ""}
+                  title="AI Prompt"
+                  onClick={() => {
+                    setPanelMode("prompt");
+                    setPanelOpen(true);
+                  }}
+                >
+                  AI Prompt
+                </button>
+                <button
+                  type="button"
+                  className={panelMode === "run" ? "active-toggle" : ""}
+                  title="Run"
+                  onClick={() => {
+                    setPanelMode("run");
+                    setPanelOpen(true);
+                  }}
+                >
+                  Run
+                </button>
+                <button
+                  type="button"
+                  className={panelMode === "memory" ? "active-toggle" : ""}
+                  title="Memory"
+                  onClick={() => {
+                    setPanelMode("memory");
+                    setPanelOpen(true);
+                  }}
+                >
+                  Memory
+                </button>
+              </div>
+            )}
+            {!showBuildPrompt && (
+              <div className="view-toggle" role="tablist" aria-label="View mode">
+                <button
+                  type="button"
+                  className={canvasMode === "kanban" ? "active-toggle" : ""}
+                  title="Kanban"
+                  onClick={() => setCanvasMode("kanban")}
+                >
+                  Kanban
+                </button>
+                <button
+                  type="button"
+                  className={canvasMode === "graph" ? "active-toggle" : ""}
+                  title="Graph"
+                  onClick={() => setCanvasMode("graph")}
+                >
+                  Graph
+                </button>
+                <button
+                  type="button"
+                  className={canvasMode === "schedule" ? "active-toggle" : ""}
+                  title="Schedule"
+                  onClick={() => setCanvasMode("schedule")}
+                >
+                  Schedule
+                </button>
+              </div>
+            )}
+            <button type="button" title="Cmd/Ctrl+," onClick={() => setSettingsOpen(true)}>Settings</button>
+            <button type="button" title="Cmd/Ctrl+K" onClick={() => setCommandBarOpen(true)}>Command Bar</button>
           </div>
         </header>
 
-        <div className="workspace-body">
-          {canvasMode === "graph" && (
-            <GraphView
-              snapshot={composedSnapshot}
-              hiddenNodeIds={hiddenNodeIds}
-              onSelectNode={(node) => {
-                setSelectedNode(node);
-                setSelectedEdge(undefined);
-                if (node) {
-                  setPanelMode("inspector");
-                  setPanelOpen(true);
-                }
-              }}
-              onSelectEdge={(edge) => {
-                setSelectedEdge(edge);
-                setSelectedNode(undefined);
-                if (edge) {
-                  setPanelMode("inspector");
-                  setPanelOpen(true);
-                }
-              }}
-              onOpenFile={openFile}
-              onCreateOverride={createOverride}
-              onToggleSkill={toggleSkillEnabled}
-              onHideNode={hideNode}
-              onRevealPath={revealPath}
-              onExportSkill={(skillId) => exportSkills([skillId])}
-              onToggleLibrary={() => {
-                setPanelMode("library");
-                setPanelOpen(true);
-              }}
-              onAddCommonRule={() => setCommonRuleModalOpen(true)}
-              onToggleCommandBar={() => setCommandBarOpen((open) => !open)}
-              onCreateNote={addNote}
-              onSaveNote={saveNote}
-              onDeleteNote={deleteNote}
-              onDuplicateNote={(text, position) => addNote(position, text)}
-              onScanWorkspace={refreshDiscovery}
-              onImportPack={requestImportPreview}
-              onEnsureRootAgents={ensureRootAgents}
-              onOpenCommonRulesFolder={openCommonRulesFolder}
-              onCreateCommonRuleDocs={createCommonRuleDocs}
-              onAddAgentLink={addAgentLink}
-              onOpenAgentDetail={(agentId, agentName) =>
-                setAgentDetailModal({ agentId, agentName })
-              }
-              onAssignSkillToAgent={assignSkillToAgent}
-              onAssignMcpToAgent={assignMcpToAgent}
-              onDropPattern={(patternId, position) => {
-                void insertInteractionPattern(patternId, position).catch(() => undefined);
-              }}
-              onSaveNodePosition={saveNodePosition}
+        <div className={`workspace-body ${showBuildPrompt ? "is-build-mode" : "is-team-mode"}`}>
+          {showBuildPrompt ? (
+            <BuildPrompt
+              backends={promptBackends}
+              busy={busy}
+              progress={generationProgress}
+              onBuild={generateAgentStructure}
             />
-          )}
+          ) : (
+            <>
+              <div className="workspace-main">
+                {canvasMode === "kanban" && (
+                  <ErrorBoundary section="KanbanView">
+                    <KanbanView
+                      runId={scheduleRunId}
+                      tasks={scheduleViewState.tasks}
+                      agents={snapshot?.agents ?? []}
+                      selectedTaskId={selectedScheduleTaskId}
+                      onSelectTask={setSelectedScheduleTaskId}
+                      onSetTaskStatus={setScheduleTaskStatus}
+                      onPinTask={pinScheduleTask}
+                    />
+                  </ErrorBoundary>
+                )}
 
-          {canvasMode === "schedule" && (
-            <ScheduleView
-              runId={scheduleRunId}
-              tasks={scheduleTasks}
-              agents={snapshot?.agents ?? []}
-              nowMs={scheduleNowMs}
-              selectedTaskId={selectedScheduleTaskId}
-              onSelectTask={(taskId) => {
-                setSelectedScheduleTaskId(taskId);
-                if (!taskId) {
-                  return;
-                }
-                setPanelMode("run");
-                setPanelOpen(true);
-              }}
-              onMoveTask={moveScheduleTask}
-              onPinTask={pinScheduleTask}
-            />
-          )}
+                {canvasMode === "graph" && (
+                  <ErrorBoundary section="GraphView">
+                    <GraphView
+                      snapshot={graphSnapshot}
+                      hiddenNodeIds={hiddenNodeIds}
+                      onSelectNode={(node) => {
+                        setSelectedNode(node);
+                        setSelectedEdge(undefined);
+                        setPanelMode("inspector");
+                        setPanelOpen(true);
+                      }}
+                      onSelectEdge={(edge) => {
+                        setSelectedEdge(edge);
+                        setSelectedNode(undefined);
+                        setPanelMode("inspector");
+                        setPanelOpen(true);
+                      }}
+                      onOpenFile={openFile}
+                      onCreateOverride={createOverride}
+                      onToggleSkill={toggleSkillEnabled}
+                      onHideNode={hideNode}
+                      onRevealPath={revealPath}
+                      onExportSkill={(skillId) => exportSkills([skillId])}
+                      onToggleLibrary={() => setCommandBarOpen(true)}
+                      onAddCommonRule={() => setCommonRuleModalOpen(true)}
+                      onToggleCommandBar={() => setCommandBarOpen(true)}
+                      onCreateNote={addNote}
+                      onSaveNote={saveNote}
+                      onDeleteNote={deleteNote}
+                      onDuplicateNote={(text, position) => addNote(position, text)}
+                      onScanWorkspace={refreshDiscovery}
+                      onImportPack={requestImportPreview}
+                      onEnsureRootAgents={ensureRootAgents}
+                      onOpenCommonRulesFolder={openCommonRulesFolder}
+                      onCreateCommonRuleDocs={createCommonRuleDocs}
+                      onAddAgentLink={addAgentLink}
+                      onOpenAgentDetail={(agentId, agentName) =>
+                        setAgentDetailModal({ agentId, agentName })
+                      }
+                      onAssignSkillToAgent={assignSkillToAgent}
+                      onAssignMcpToAgent={assignMcpToAgent}
+                      onDropPattern={(patternId, position) => {
+                        void insertInteractionPattern(patternId, position).catch(() => undefined);
+                      }}
+                      onSaveNodePosition={saveNodePosition}
+                      onAgentExpand={(agentId) =>
+                        setExpandedAgentId((current) => (current === agentId ? null : agentId))
+                      }
+                    />
+                  </ErrorBoundary>
+                )}
 
-          <RightPanel
-            mode={panelMode}
-            open={panelOpen}
-            snapshot={composedSnapshot}
-            selectedNode={canvasMode === "graph" ? selectedNode : undefined}
-            selectedScheduleTaskId={selectedScheduleTaskId}
-            selectedEdge={selectedEdge}
-            onModeChange={setPanelMode}
-            onOpenFile={openFile}
-            onRevealPath={revealPath}
-            onCreateSkill={createSkill}
-            onExportSkills={exportSkills}
-            onValidateSkill={validateSkill}
-            onCreateOverride={createOverride}
-            onSaveSkillFrontmatter={saveSkillFrontmatter}
-            saveSignal={saveSignal}
-            promptBackends={promptBackends}
-            promptHistory={promptHistory}
-            generationProgress={generationProgress}
-            onRefreshPromptTools={refreshPromptTools}
-            onGenerateAgentStructure={generateAgentStructure}
-            onDeletePromptHistory={deletePromptHistory}
-            onReapplyPromptHistory={reapplyPromptHistory}
-            interactionPatterns={interactionPatterns}
-            onInsertPattern={insertInteractionPattern}
-            onUpdateInteractionEdge={updateInteractionEdge}
-            activeFlowName={activeFlowName}
-            runBackends={promptBackends}
-            runHistory={runHistory}
-            runEvents={runEvents}
-            activeRunId={activeRunId}
-            selectedRunId={selectedRunId}
-            selectedScheduleTask={selectedScheduleTask}
-            onRunFlow={runFlowFromPanel}
-            onRunNode={runNodeFromPanel}
-            onStopRun={stopRunFromPanel}
-            onRefreshRunHistory={refreshRunHistory}
-            onSelectRun={selectRun}
-            onPinOutput={pinOutput}
-            onUnpinOutput={unpinOutput}
-            onSetBackendOverrides={setBackendOverrides}
-          />
+                {canvasMode === "schedule" && (
+                  <ErrorBoundary section="ScheduleView">
+                    <ScheduleView
+                      runId={scheduleRunId}
+                      tasks={scheduleViewState.tasks}
+                      agents={snapshot?.agents ?? []}
+                      nowMs={scheduleViewState.nowMs}
+                      selectedTaskId={selectedScheduleTaskId}
+                      onSelectTask={setSelectedScheduleTaskId}
+                      onMoveTask={moveScheduleTask}
+                      onPinTask={pinScheduleTask}
+                    />
+                  </ErrorBoundary>
+                )}
+              </div>
+              <ErrorBoundary section="RightPanel">
+                <RightPanel
+                  mode={panelMode}
+                  open={panelOpen}
+                  saveSignal={saveSignal}
+                  snapshot={composedSnapshot}
+                  selectedNode={selectedNode}
+                  selectedScheduleTaskId={selectedScheduleTaskId}
+                  selectedEdge={selectedEdge}
+                  onModeChange={setPanelMode}
+                  onOpenFile={openFile}
+                  onRevealPath={revealPath}
+                  onCreateSkill={createSkill}
+                  onExportSkills={exportSkills}
+                  onValidateSkill={validateSkill}
+                  onCreateOverride={createOverride}
+                  onSaveSkillFrontmatter={saveSkillFrontmatter}
+                  promptBackends={promptBackends}
+                  promptHistory={promptHistory}
+                  generationProgress={generationProgress}
+                  onRefreshPromptTools={refreshPromptTools}
+                  onGenerateAgentStructure={generateAgentStructure}
+                  onDeletePromptHistory={deletePromptHistory}
+                  onReapplyPromptHistory={reapplyPromptHistory}
+                  interactionPatterns={interactionPatterns}
+                  onInsertPattern={(patternId) => insertInteractionPattern(patternId)}
+                  onUpdateInteractionEdge={(edgeId, update) => updateInteractionEdge(edgeId, update)}
+                  activeFlowName={activeFlowName}
+                  runBackends={promptBackends}
+                  backendOverrides={backendOverrides}
+                  defaultBackendId={defaultBackendId}
+                  runHistory={runHistory}
+                  runEvents={runEvents}
+                  activeRunId={activeRunId}
+                  selectedRunId={selectedRunId}
+                  selectedScheduleTask={selectedScheduleTask}
+                  onRunFlow={runFlowFromPanel}
+                  onRunNode={runNodeFromPanel}
+                  onReplayRun={replayRunFromPanel}
+                  onStopRun={stopRunFromPanel}
+                  onRefreshRunHistory={refreshRunHistory}
+                  onSelectRun={selectRun}
+                  onPinOutput={pinOutput}
+                  onUnpinOutput={unpinOutput}
+                  onSetBackendOverrides={setBackendOverrides}
+                  onSetDefaultBackend={setDefaultBackend}
+                  onTestBackend={testBackendFromPanel}
+                  onOpenRunLog={openRunLog}
+                  memoryItems={memoryItems}
+                  memoryCommits={memoryCommits}
+                  memoryQueryResult={memoryQueryResult}
+                  onRefreshMemory={refreshMemory}
+                  onSearchMemory={searchMemory}
+                  onAddMemoryItem={addMemoryItem}
+                  onSupersedeMemory={supersedeMemory}
+                  onCheckoutMemory={checkoutMemory}
+                />
+              </ErrorBoundary>
+            </>
+          )}
         </div>
 
-        <div className="status-bar">
-          <span>Skills {summary.skills}</span>
-          <span>Rules {summary.rules}</span>
-          <span>Errors {summary.errors}</span>
-          <span>Warnings {summary.warnings}</span>
-          <span>Flow {activeFlowName}</span>
-          <span>Canvas {canvasMode}</span>
-          <span>Run {activeRunId ?? "-"}</span>
-          <span>Focus Canvas</span>
-        </div>
+        <StatusBar
+          skills={summary.skills}
+          rules={summary.rules}
+          errors={summary.errors}
+          warnings={summary.warnings}
+          focus={focusLabel}
+          agents={snapshot?.agents.length ?? 0}
+          tasks={runSummary.total}
+          done={runSummary.done}
+          failed={runSummary.failed}
+          flowName={activeFlowName}
+          canvasView={canvasMode}
+          runId={activeRunId}
+          costUsd={cacheMetrics.cost}
+          cacheSavedRate={cacheSavedRate}
+          contextUsed={contextUsed}
+          contextThreshold={cacheConfig.contextThreshold}
+          contextState={contextState}
+          showBuildNew={!showBuildPrompt}
+          onBuildNew={() => {
+            setForceBuildPrompt(true);
+            setCanvasMode("kanban");
+          }}
+        />
       </section>
 
       <CommandBar
         open={commandBarOpen}
         commands={commandItems}
         onClose={() => setCommandBarOpen(false)}
+      />
+
+      <SettingsModal
+        open={settingsOpen}
+        cacheConfig={cacheConfig}
+        cacheMetrics={cacheMetrics}
+        onClose={() => setSettingsOpen(false)}
+        onRefreshDiscovery={refreshDiscovery}
+        onSaveFlow={saveFlow}
+        onLoadFlow={loadFlow}
+        onRunValidationAll={runValidationAll}
+        onOpenSkillWizard={() => setSkillWizardOpen(true)}
+        onOpenAgentCreation={() => setAgentCreationOpen(true)}
+        onOpenCommonRuleModal={() => setCommonRuleModalOpen(true)}
+        onEnsureRootAgents={ensureRootAgents}
+        onOpenCommonRulesFolder={openCommonRulesFolder}
+        onCreateCommonRuleDocs={createCommonRuleDocs}
+        onExportAllSkills={() => exportSkills([])}
+        onImportPack={requestImportPreview}
+        onOpenKeyboardHelp={() => setKeyboardHelpOpen(true)}
+        onSaveCacheConfig={saveCacheConfig}
+        onRefreshCacheMetrics={refreshCacheMetrics}
+        onResetCacheMetrics={resetCacheMetrics}
       />
 
       <SkillWizardModal
@@ -1516,7 +2211,19 @@ export default function App() {
 
       {toast && (
         <div className={`toast ${toast.level}`} onAnimationEnd={() => setToast(undefined)}>
-          {toast.message}
+          <img
+            className="toast-icon"
+            src={
+              toast.level === "warning"
+                ? toastWarnIcon
+                : toast.level === "error"
+                  ? toastErrorIcon
+                  : toastInfoIcon
+            }
+            alt=""
+            aria-hidden="true"
+          />
+          <span>{toast.message}</span>
         </div>
       )}
     </div>
@@ -1586,6 +2293,13 @@ function handleExtensionMessage(
       message: string;
       progress?: number;
     } | undefined) => void;
+    setRunEvents: (events: RunEvent[] | ((prev: RunEvent[]) => RunEvent[])) => void;
+    setCacheMetrics: (metrics: CacheMetrics) => void;
+    setMemoryItems: (items: MemoryItem[] | ((previous: MemoryItem[]) => MemoryItem[])) => void;
+    setMemoryQueryResult: (result: MemoryQueryResult | undefined) => void;
+    setContextThresholdWarning: (
+      warning: { current: number; threshold: number } | undefined
+    ) => void;
   }
 ) {
   switch (message.type) {
@@ -1611,11 +2325,52 @@ function handleExtensionMessage(
       handlers.setPromptBackends(message.payload.backends);
       return;
     }
+    case "COLLAB_EVENT": {
+      handlers.setRunEvents((previous) => {
+        const synthetic: RunEvent = {
+          ts: message.payload.ts,
+          flow: message.payload.flowName,
+          runId: message.payload.runId,
+          type: message.payload.event,
+          actor: message.payload.actor,
+          provenance: message.payload.provenance,
+          payload: message.payload.data
+        };
+        return [...previous, synthetic].slice(-300);
+      });
+      return;
+    }
+    case "MEMORY_UPDATED": {
+      handlers.setMemoryItems((previous) => {
+        const withoutCurrent = previous.filter((item) => item.id !== message.payload.item.id);
+        if (message.payload.action === "deleted") {
+          return withoutCurrent;
+        }
+        return [message.payload.item, ...withoutCurrent].slice(0, 250);
+      });
+      return;
+    }
+    case "MEMORY_QUERY_RESULT": {
+      handlers.setMemoryQueryResult(message.payload);
+      return;
+    }
+    case "CONTEXT_PACKET_BUILT": {
+      return;
+    }
     case "PROMPT_HISTORY": {
       handlers.setPromptHistory(message.payload.items);
       return;
     }
     case "SCHEDULE_EVENT": {
+      return;
+    }
+    case "CACHE_METRICS_UPDATE": {
+      handlers.setCacheMetrics(message.payload);
+      handlers.setContextThresholdWarning(undefined);
+      return;
+    }
+    case "CONTEXT_THRESHOLD_WARNING": {
+      handlers.setContextThresholdWarning(message.payload);
       return;
     }
     case "GENERATION_PROGRESS": {

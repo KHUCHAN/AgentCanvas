@@ -4,13 +4,23 @@ export type ValidationIssue = {
   message: string;
 };
 
-export type CliBackendId = "auto" | "claude-code" | "gemini-cli" | "codex-cli" | "aider" | "custom";
+export type CliBackendId =
+  | "auto"
+  | "claude"
+  | "gemini"
+  | "codex"
+  | "claude-code"
+  | "gemini-cli"
+  | "codex-cli"
+  | "aider"
+  | "custom";
 
 export type AgentRuntime =
   | {
       kind: "cli";
       backendId: CliBackendId;
       cwdMode?: "workspace" | "agentHome";
+      modelId?: string;
     }
   | {
       kind: "openclaw";
@@ -64,6 +74,7 @@ export type AgentProfile = {
   assignedSkillIds?: string[];
   assignedMcpServerIds?: string[];
   runtime?: AgentRuntime;
+  preferredModel?: string;
   color?: string;
   avatar?: string;
 };
@@ -82,6 +93,75 @@ export type StudioEdge = {
   type: "contains" | "overrides" | "locatedIn" | "appliesTo" | "agentLink" | "delegates" | "interaction";
   label?: string;
   data?: Record<string, unknown>;
+};
+
+export type InteractionTopology =
+  | "p2p"
+  | "manager_worker"
+  | "pipeline"
+  | "blackboard"
+  | "market_auction"
+  | "debate_judge"
+  | "broker"
+  | "router_targeted"
+  | "broadcast";
+
+export type MessageForm = "nl_text" | "structured_json" | "acl_performative" | "multimodal";
+
+export type SyncMode = "turn_based" | "req_res" | "async" | "streaming";
+
+export type Termination =
+  | { type: "max_rounds"; rounds: number }
+  | { type: "timeout_ms"; ms: number }
+  | { type: "judge_decision" }
+  | { type: "consensus_threshold"; threshold: number }
+  | { type: "quality_gate"; metric: string; op: ">=" | "<="; value: number };
+
+export type InteractionEdgeData = {
+  patternId: string;
+  topology: InteractionTopology;
+  messageForm: MessageForm;
+  sync: SyncMode;
+  termination: Termination;
+  params: Record<string, unknown>;
+  observability: {
+    logs: boolean;
+    traces: boolean;
+    retain_days?: number;
+  };
+};
+
+export type SystemNodeKind =
+  | "judge"
+  | "blackboard"
+  | "router"
+  | "broker"
+  | "coordinator"
+  | "gateway"
+  | "custom";
+
+export type SystemNodeData = {
+  id: string;
+  name: string;
+  role: string;
+  description?: string;
+  kind?: SystemNodeKind;
+  status?: "active" | "idle" | "paused";
+};
+
+export type HandoffEnvelope = {
+  intent: string;
+  inputs?: string[];
+  plan?: string[];
+  constraints?: string[];
+  deliverables?: string[];
+  sandboxWorkDir: string;
+  proposalJson: string;
+  changedFiles: string[];
+  // Backward compatibility for legacy payload keys.
+  SandboxWorkDir?: string;
+  ProposalJson?: string;
+  ChangedFiles?: string[];
 };
 
 export type Skill = {
@@ -188,6 +268,145 @@ export type SkillPackPreview = {
   warnings: string[];
 };
 
+export type CacheConfig = {
+  retention: "short" | "long";
+  contextPruning: {
+    mode: "cache-ttl";
+    ttlSeconds: number;
+  };
+  diagnostics: {
+    enabled: boolean;
+    logPath: string;
+  };
+  modelRouting: {
+    heartbeat: string;
+    cron: string;
+    default: string;
+  };
+  contextThreshold: number;
+};
+
+export type CacheMetrics = {
+  cacheRead: number;
+  cacheWrite: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  savedCost: number;
+  model: string;
+  hitRate: number;
+};
+
+export type UsageMetrics = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  model?: string;
+  cost?: number;
+  savedCost?: number;
+};
+
+export type EventProvenance =
+  | "user_input"
+  | "orchestrator_to_worker"
+  | "worker_proposal"
+  | "announce_internal"
+  | "announce_user"
+  | "system";
+
+export type AnnounceMessage = {
+  runId: string;
+  workerId: string;
+  workerName: string;
+  status: "ok" | "error" | "timeout";
+  summary: string;
+  proposalPath?: string;
+  touchedFiles: string[];
+  testsRun?: { passed: number; failed: number };
+  durationMs: number;
+};
+
+export type ReviewDecision = "apply" | "reject" | "revise";
+
+export type ProposalReview = {
+  runId: string;
+  taskId: string;
+  decision: ReviewDecision;
+  reason?: string;
+  appliedAt?: number;
+};
+
+export type MemoryItemType =
+  | "fact"
+  | "decision"
+  | "learning"
+  | "summary"
+  | "preference"
+  | "artifact";
+
+export type MemoryNamespace =
+  | "system"
+  | "shared"
+  | `agent/${string}`
+  | `flow/${string}`;
+
+export type MemoryItem = {
+  id: string;
+  namespace: MemoryNamespace;
+  type: MemoryItemType;
+  title: string;
+  content: string;
+  source: {
+    agentId?: string;
+    runId?: string;
+    taskId?: string;
+    flowName?: string;
+  };
+  tags: string[];
+  importance: number;
+  createdAt: number;
+  updatedAt: number;
+  ttlMs?: number;
+  supersededBy?: string;
+};
+
+export type MemoryQueryResult = {
+  items: MemoryItem[];
+  totalCount: number;
+  budgetUsed: number;
+  budgetLimit: number;
+};
+
+export type ContextPacket = {
+  systemContext: string;
+  relevantMemories: string;
+  totalTokens: number;
+  sources: Array<{
+    memoryId: string;
+    title: string;
+    relevanceScore: number;
+  }>;
+};
+
+export type MemoryCommit = {
+  commitId: string;
+  parentId?: string;
+  author: string;
+  message: string;
+  itemsAdded: string[];
+  itemsUpdated: string[];
+  itemsSuperseded: string[];
+  timestamp: number;
+};
+
+export type SessionScope = "workspace" | "user" | "channel";
+
+export type SessionContext = {
+  scope: SessionScope;
+  scopeId?: string;
+};
+
 export type TaskStatus =
   | "planned"
   | "ready"
@@ -258,13 +477,23 @@ export type RunEvent = {
     | "node_output"
     | "node_failed"
     | "edge_fired"
+    | "task_dispatched"
+    | "proposal_submitted"
+    | "proposal_reviewed"
+    | "proposal_applied"
+    | "proposal_rejected"
+    | "announce"
+    | "memory_injected"
     | "run_log";
   nodeId?: string;
   edgeId?: string;
   input?: unknown;
   output?: unknown;
   payload?: unknown;
-  usage?: Record<string, number>;
+  usage?: UsageMetrics;
+  provenance?: EventProvenance;
+  parentRunId?: string;
+  actor?: string;
   status?: RunStatus;
   message?: string;
   meta?: Record<string, unknown>;
@@ -275,6 +504,7 @@ export type PinnedOutput = {
   nodeId: string;
   output: unknown;
   pinnedAt: number;
+  expiresAt?: number;
 };
 
 export type RequestId = string;
@@ -361,6 +591,7 @@ export type WebviewToExtensionMessage =
     >
   | RequestMessage<"DELETE_AGENT", { agentId: string }>
   | RequestMessage<"DETECT_CLI_BACKENDS">
+  | RequestMessage<"TEST_BACKEND", { backendId: CliBackendId }>
   | RequestMessage<
       "GENERATE_AGENT_STRUCTURE",
       {
@@ -397,6 +628,7 @@ export type WebviewToExtensionMessage =
       { runId: string; taskId: string; forceStartMs?: number; forceAgentId?: string }
     >
   | RequestMessage<"TASK_SET_PRIORITY", { runId: string; taskId: string; priority?: number }>
+  | RequestMessage<"TASK_SET_STATUS", { runId: string; taskId: string; status: TaskStatus }>
   | RequestMessage<
       "RUN_FLOW",
       {
@@ -405,18 +637,51 @@ export type WebviewToExtensionMessage =
         runName?: string;
         tags?: string[];
         usePinnedOutputs?: boolean;
+        session?: SessionContext;
       }
     >
   | RequestMessage<
       "RUN_NODE",
-      { flowName: string; nodeId: string; backendId?: CliBackendId; usePinnedOutput?: boolean }
+      {
+        flowName: string;
+        nodeId: string;
+        backendId?: CliBackendId;
+        usePinnedOutput?: boolean;
+        session?: SessionContext;
+      }
     >
+  | RequestMessage<"REPLAY_RUN", { runId: string; modifiedPrompts?: Record<string, string> }>
   | RequestMessage<"STOP_RUN", { runId: string }>
   | RequestMessage<"LIST_RUNS", { flowName?: string } | undefined>
   | RequestMessage<"LOAD_RUN", { flowName: string; runId: string }>
   | RequestMessage<"PIN_OUTPUT", { flowName: string; nodeId: string; output: unknown }>
   | RequestMessage<"UNPIN_OUTPUT", { flowName: string; nodeId: string }>
+  | RequestMessage<"APPLY_PROPOSAL", { runId: string; agentId: string }>
+  | RequestMessage<"REJECT_PROPOSAL", { runId: string; agentId: string; reason?: string }>
+  | RequestMessage<"INSERT_PATTERN", { patternId: string; anchor?: Position }>
+  | RequestMessage<"CONFIGURE_INTERACTION_EDGE", { edgeId: string; label?: string; data: InteractionEdgeData }>
+  | RequestMessage<"HANDOFF_RECEIVED", { runId: string; fromAgentId: string; toAgentId: string; handoff: HandoffEnvelope }>
+  | RequestMessage<"GET_COLLAB_LOG", { runId: string }>
+  | RequestMessage<"GET_COLLAB_REPORT_MD", { runId: string }>
+  | RequestMessage<"MANUAL_REVIEW", { runId: string; taskId: string; decision: ReviewDecision; reason?: string }>
+  | RequestMessage<
+      "GET_MEMORY_ITEMS",
+      { namespace?: MemoryNamespace; type?: MemoryItemType; limit?: number } | undefined
+    >
+  | RequestMessage<
+      "SEARCH_MEMORY",
+      { query: string; namespaces?: MemoryNamespace[]; budgetTokens?: number }
+    >
+  | RequestMessage<"ADD_MEMORY_ITEM", { item: Omit<MemoryItem, "id" | "createdAt" | "updatedAt"> }>
+  | RequestMessage<"SUPERSEDE_MEMORY", { oldItemId: string; newContent: string; reason: string }>
+  | RequestMessage<"MEMORY_CHECKOUT", { commitId: string }>
+  | RequestMessage<"GET_MEMORY_COMMITS", { limit?: number } | undefined>
+  | RequestMessage<"GET_CACHE_METRICS", { flowName: string }>
+  | RequestMessage<"GET_CACHE_CONFIG">
+  | RequestMessage<"UPDATE_CACHE_CONFIG", CacheConfig>
+  | RequestMessage<"RESET_CACHE_METRICS", { flowName?: string } | undefined>
   | RequestMessage<"SET_AGENT_RUNTIME", { agentId: string; runtime: AgentRuntime | null }>
+  | RequestMessage<"SET_DEFAULT_BACKEND", { backendId: CliBackendId }>
   | RequestMessage<"SET_BACKEND_OVERRIDES", { overrides: CliBackendOverrides }>
   | RequestMessage<"LOG_INTERACTION_EVENT", {
       flowName: string;
@@ -437,8 +702,22 @@ export type ExtensionToWebviewMessage =
     }
   | { type: "IMPORT_PREVIEW"; payload: { preview: SkillPackPreview } }
   | { type: "CLI_BACKENDS"; payload: { backends: CliBackend[] } }
+  | { type: "COLLAB_EVENT"; payload: {
+      event: "task_dispatched" | "proposal_submitted" | "proposal_reviewed" | "announce";
+      runId: string;
+      flowName: string;
+      actor: string;
+      provenance: EventProvenance;
+      data: unknown;
+      ts: number;
+    } }
+  | { type: "MEMORY_UPDATED"; payload: { item: MemoryItem; action: "added" | "updated" | "superseded" | "deleted" } }
+  | { type: "MEMORY_QUERY_RESULT"; payload: MemoryQueryResult }
+  | { type: "CONTEXT_PACKET_BUILT"; payload: { taskId: string; packet: ContextPacket } }
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
   | { type: "SCHEDULE_EVENT"; payload: { event: TaskEvent } }
+  | { type: "CACHE_METRICS_UPDATE"; payload: CacheMetrics }
+  | { type: "CONTEXT_THRESHOLD_WARNING"; payload: { current: number; threshold: number } }
   | {
       type: "GENERATION_PROGRESS";
       payload: {

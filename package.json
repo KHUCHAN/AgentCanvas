@@ -6,7 +6,7 @@
   "publisher": "local",
   "icon": "media/agentcanvas_marketplace.png",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.74.0"
   },
   "categories": [
     "Other"
@@ -48,6 +48,9 @@
           "default": "auto",
           "enum": [
             "auto",
+            "claude",
+            "gemini",
+            "codex",
             "claude-code",
             "gemini-cli",
             "codex-cli",
@@ -73,6 +76,13 @@
           "type": "object",
           "default": {},
           "description": "Optional command/args/env overrides for claude-code, gemini-cli, codex-cli, aider, and custom backends."
+        },
+        "agentCanvas.agentConcurrency": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 32,
+          "description": "Maximum number of concurrent tasks scheduled per agent lane."
         }
       }
     }
@@ -91,6 +101,7 @@
     "@iarna/toml": "^2.2.5",
     "gray-matter": "^4.0.3",
     "jszip": "^3.10.1",
+    "yaml": "^2.8.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

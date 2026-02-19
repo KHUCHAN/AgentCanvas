@@ -3,9 +3,25 @@ import logo from "../assets/agentcanvas_icon_28.png";
 
 type LeftSidebarProps = {
   snapshot?: DiscoverySnapshot;
+  onOpenBuildPrompt: () => void;
+  onRefreshDiscovery: () => void;
+  onOpenSettings: () => void;
+  onOpenCommandBar: () => void;
+  onOpenCommonRuleModal: () => void;
+  onOpenSkillWizard: () => void;
+  onOpenAgentCreation: () => void;
 };
 
-export default function LeftSidebar({ snapshot }: LeftSidebarProps) {
+export default function LeftSidebar({
+  snapshot,
+  onOpenBuildPrompt,
+  onRefreshDiscovery,
+  onOpenSettings,
+  onOpenCommandBar,
+  onOpenCommonRuleModal,
+  onOpenSkillWizard,
+  onOpenAgentCreation
+}: LeftSidebarProps) {
   const providers = (snapshot?.nodes ?? [])
     .filter((node) => node.type === "provider")
     .map((node) => {
@@ -30,29 +46,87 @@ export default function LeftSidebar({ snapshot }: LeftSidebarProps) {
         title="Providers"
         items={providers.length > 0 ? providers : ["GPT / Codex", "Claude", "Gemini"]}
       />
-      <SidebarSection title="Agents" items={[snapshot?.agent.name ?? "Local Agent"]} />
-      <SidebarSection title="Skills" items={[`${snapshot?.skills.length ?? 0} discovered`]} />
+      <SidebarSection
+        title="Agents"
+        items={[snapshot?.agent.name ?? "Local Agent", "Create agent"]}
+        onItemClick={(item) => {
+          if (item === "Create agent") {
+            onOpenAgentCreation();
+          }
+        }}
+      />
+      <SidebarSection
+        title="Skills"
+        items={[`${snapshot?.skills.length ?? 0} discovered`, "New skill"]}
+        onItemClick={(item) => {
+          if (item === "New skill") {
+            onOpenSkillWizard();
+          }
+        }}
+      />
       <SidebarSection
         title="Ops"
         items={[
           `Common rules ${snapshot?.commonRules.length ?? 0}`,
-          `MCP servers ${snapshot?.mcpServers.length ?? 0}`
+          `MCP servers ${snapshot?.mcpServers.length ?? 0}`,
+          "Add common rule"
         ]}
+        onItemClick={(item) => {
+          if (item === "Add common rule") {
+            onOpenCommonRuleModal();
+          }
+        }}
       />
-      <SidebarSection title="Packs" items={["Export zip", "Import zip"]} />
-      <SidebarSection title="Settings" items={["Locations", "Validation"]} />
+      <SidebarSection
+        title="Packs"
+        items={["Build Team", "Export zip", "Import zip"]}
+        onItemClick={(item) => {
+          if (item === "Build Team") {
+            onOpenBuildPrompt();
+          }
+          if (item === "Export zip" || item === "Import zip") {
+            onOpenCommandBar();
+          }
+        }}
+      />
+      <SidebarSection
+        title="Settings"
+        items={["Refresh", "Settings", "Command Bar"]}
+        onItemClick={(item) => {
+          if (item === "Refresh") {
+            onRefreshDiscovery();
+          }
+          if (item === "Settings") {
+            onOpenSettings();
+          }
+          if (item === "Command Bar") {
+            onOpenCommandBar();
+          }
+        }}
+      />
     </div>
   );
 }
 
-function SidebarSection(props: { title: string; items: string[] }) {
+function SidebarSection(props: { title: string; items: string[]; onItemClick?: (item: string) => void }) {
   return (
     <div className="sidebar-section">
       <div className="sidebar-title">{props.title}</div>
       {props.items.map((item) => (
-        <div key={item} className="sidebar-item">
-          {item}
-        </div>
+        props.onItemClick ? (
+          <button
+            type="button"
+            key={item}
+            className="sidebar-item button-like"
+            onClick={() => props.onItemClick?.(item)}
+          >
+            {item}
+          </button>
+        ) : (
+          <div key={item} className="sidebar-item">
+            {item}
+          </div>
+        )
       ))}
     </div>
   );

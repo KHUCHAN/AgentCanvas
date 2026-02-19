@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentProfile, AgentRole, AgentRuntime } from "../types";
+import { z } from "zod";
+import type { AgentProfile, AgentRole, AgentRuntime, CliBackendId } from "../types";
 import { sanitizeFileName } from "./pathUtils";
 
 const AGENT_PROFILES_DIR = join(".agentcanvas", "agents");
@@ -18,10 +19,59 @@ type CreateAgentInput = {
 
 type AgentProfilePatch = Partial<Pick<
   AgentProfile,
-  "role" | "roleLabel" | "description" | "systemPrompt" | "isOrchestrator" | "color" | "avatar"
+  "role" | "roleLabel" | "description" | "systemPrompt" | "isOrchestrator" | "color" | "avatar" | "preferredModel"
 >> & {
   runtime?: AgentRuntime | null;
 };
+
+const cliBackendIdSchema: z.ZodType<CliBackendId> = z.enum([
+  "auto",
+  "claude",
+  "gemini",
+  "codex",
+  "claude-code",
+  "gemini-cli",
+  "codex-cli",
+  "aider",
+  "custom"
+]);
+
+const runtimeSchema = z.union([
+  z.object({
+    kind: z.literal("cli"),
+    backendId: cliBackendIdSchema,
+    cwdMode: z.enum(["workspace", "agentHome"]).optional(),
+    modelId: z.string().optional()
+  }),
+  z.object({
+    kind: z.literal("openclaw"),
+    gatewayUrl: z.string().optional(),
+    agentKey: z.string().optional()
+  })
+]);
+
+const agentRoleSchema = z.enum([
+  "orchestrator",
+  "coder",
+  "researcher",
+  "reviewer",
+  "planner",
+  "tester",
+  "writer",
+  "custom"
+]);
+
+const agentProfilePatchSchema = z.object({
+  role: agentRoleSchema.optional(),
+  roleLabel: z.string().optional(),
+  description: z.string().optional(),
+  systemPrompt: z.string().optional(),
+  isOrchestrator: z.boolean().optional(),
+  color: z.string().optional(),
+  avatar: z.string().optional(),
+  preferredModel: z.string().optional(),
+  runtime: runtimeSchema.nullable().optional()
+});
 
 function profileDir(workspaceRoot: string): string {
   return join(workspaceRoot, AGENT_PROFILES_DIR);
@@ -29,6 +79,20 @@ function profileDir(workspaceRoot: string): string {
 
 function profileFilePath(workspaceRoot: string, agentId: string): string {
   return join(profileDir(workspaceRoot), `${sanitizeFileName(agentId)}.json`);
+}
+
+async function readAgentProfileById(workspaceRoot: string, agentId: string): Promise<AgentProfile | undefined> {
+  const path = profileFilePath(workspaceRoot, agentId);
+  try {
+    const raw = await readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as AgentProfile;
+    if (!parsed?.id || !parsed?.name) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
 }
 
 function slugify(value: string): string {
@@ -141,18 +205,25 @@ export async function applyAgentProfilePatch(input: {
   baseProfile: AgentProfile;
   patch: AgentProfilePatch;
 }): Promise<AgentProfile> {
+  const patchResult = agentProfilePatchSchema.safeParse(input.patch);
+  if (!patchResult.success) {
+    throw new Error(`Invalid agent profile patch: ${patchResult.error.issues.map((issue) => issue.message).join(", ")}`);
+  }
+  const patch = patchResult.data;
+  const latestSaved = await readAgentProfileById(input.workspaceRoot, input.baseProfile.id);
+  const baseProfile = latestSaved ?? input.baseProfile;
   const next = normalizeAgentProfile(
     {
-      ...input.baseProfile,
-      ...input.patch,
-      runtime: input.patch.runtime === null ? undefined : input.patch.runtime ?? input.baseProfile.runtime,
-      roleLabel: input.patch.roleLabel?.trim() ?? input.baseProfile.roleLabel,
-      description: input.patch.description?.trim() ?? input.baseProfile.description,
-      systemPrompt: input.patch.systemPrompt?.trim() ?? input.baseProfile.systemPrompt
+      ...baseProfile,
+      ...patch,
+      runtime: patch.runtime === null ? undefined : patch.runtime ?? baseProfile.runtime,
+      roleLabel: patch.roleLabel?.trim() ?? baseProfile.roleLabel,
+      description: patch.description?.trim() ?? baseProfile.description,
+      systemPrompt: patch.systemPrompt?.trim() ?? baseProfile.systemPrompt
     },
     {
-      workspaceRoot: input.baseProfile.workspaceRoot,
-      homeDir: input.baseProfile.homeDir
+      workspaceRoot: baseProfile.workspaceRoot,
+      homeDir: baseProfile.homeDir
     }
   );
   await saveAgentProfile(input.workspaceRoot, next);
@@ -164,12 +235,14 @@ export async function assignSkillToAgent(input: {
   agent: AgentProfile;
   skillId: string;
 }): Promise<AgentProfile> {
+  const latestSaved = await readAgentProfileById(input.workspaceRoot, input.agent.id);
+  const baseProfile = latestSaved ?? input.agent;
   const next = normalizeAgentProfile(
     {
-      ...input.agent,
-      assignedSkillIds: [...(input.agent.assignedSkillIds ?? []), input.skillId]
+      ...baseProfile,
+      assignedSkillIds: [...(baseProfile.assignedSkillIds ?? []), input.skillId]
     },
-    { workspaceRoot: input.agent.workspaceRoot, homeDir: input.agent.homeDir }
+    { workspaceRoot: baseProfile.workspaceRoot, homeDir: baseProfile.homeDir }
   );
   await saveAgentProfile(input.workspaceRoot, next);
   return next;
@@ -180,12 +253,14 @@ export async function unassignSkillFromAgent(input: {
   agent: AgentProfile;
   skillId: string;
 }): Promise<AgentProfile> {
+  const latestSaved = await readAgentProfileById(input.workspaceRoot, input.agent.id);
+  const baseProfile = latestSaved ?? input.agent;
   const next = normalizeAgentProfile(
     {
-      ...input.agent,
-      assignedSkillIds: (input.agent.assignedSkillIds ?? []).filter((id) => id !== input.skillId)
+      ...baseProfile,
+      assignedSkillIds: (baseProfile.assignedSkillIds ?? []).filter((id) => id !== input.skillId)
     },
-    { workspaceRoot: input.agent.workspaceRoot, homeDir: input.agent.homeDir }
+    { workspaceRoot: baseProfile.workspaceRoot, homeDir: baseProfile.homeDir }
   );
   await saveAgentProfile(input.workspaceRoot, next);
   return next;
@@ -196,12 +271,14 @@ export async function assignMcpToAgent(input: {
   agent: AgentProfile;
   mcpServerId: string;
 }): Promise<AgentProfile> {
+  const latestSaved = await readAgentProfileById(input.workspaceRoot, input.agent.id);
+  const baseProfile = latestSaved ?? input.agent;
   const next = normalizeAgentProfile(
     {
-      ...input.agent,
-      assignedMcpServerIds: [...(input.agent.assignedMcpServerIds ?? []), input.mcpServerId]
+      ...baseProfile,
+      assignedMcpServerIds: [...(baseProfile.assignedMcpServerIds ?? []), input.mcpServerId]
     },
-    { workspaceRoot: input.agent.workspaceRoot, homeDir: input.agent.homeDir }
+    { workspaceRoot: baseProfile.workspaceRoot, homeDir: baseProfile.homeDir }
   );
   await saveAgentProfile(input.workspaceRoot, next);
   return next;
@@ -212,12 +289,14 @@ export async function unassignMcpFromAgent(input: {
   agent: AgentProfile;
   mcpServerId: string;
 }): Promise<AgentProfile> {
+  const latestSaved = await readAgentProfileById(input.workspaceRoot, input.agent.id);
+  const baseProfile = latestSaved ?? input.agent;
   const next = normalizeAgentProfile(
     {
-      ...input.agent,
-      assignedMcpServerIds: (input.agent.assignedMcpServerIds ?? []).filter((id) => id !== input.mcpServerId)
+      ...baseProfile,
+      assignedMcpServerIds: (baseProfile.assignedMcpServerIds ?? []).filter((id) => id !== input.mcpServerId)
     },
-    { workspaceRoot: input.agent.workspaceRoot, homeDir: input.agent.homeDir }
+    { workspaceRoot: baseProfile.workspaceRoot, homeDir: baseProfile.homeDir }
   );
   await saveAgentProfile(input.workspaceRoot, next);
   return next;
@@ -228,13 +307,15 @@ export async function setAgentDelegation(input: {
   agent: AgentProfile;
   workerIds: string[];
 }): Promise<AgentProfile> {
+  const latestSaved = await readAgentProfileById(input.workspaceRoot, input.agent.id);
+  const baseProfile = latestSaved ?? input.agent;
   const next = normalizeAgentProfile(
     {
-      ...input.agent,
+      ...baseProfile,
       delegatesTo: input.workerIds,
       isOrchestrator: true
     },
-    { workspaceRoot: input.agent.workspaceRoot, homeDir: input.agent.homeDir }
+    { workspaceRoot: baseProfile.workspaceRoot, homeDir: baseProfile.homeDir }
   );
   await saveAgentProfile(input.workspaceRoot, next);
   return next;

@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, realpath, rm, stat } from "node:fs/promises";
 import { execFile as execFileCb } from "node:child_process";
 import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -89,7 +89,7 @@ export async function prepareSandbox(input: SandboxIdentity & { files: string[] 
   await mkdir(paths.proposalDir, { recursive: true });
 
   for (const relativePath of copiedFiles) {
-    const sourcePath = resolveWorkspacePath(input.workspaceRoot, relativePath);
+    const sourcePath = await resolveWorkspacePath(input.workspaceRoot, relativePath);
     const info = await stat(sourcePath).catch(() => undefined);
     if (!info) {
       throw new Error(`Sandbox source file does not exist: ${relativePath}`);
@@ -123,11 +123,22 @@ export async function readGitHead(workspaceRoot: string): Promise<string | undef
   }
 }
 
-function resolveWorkspacePath(workspaceRoot: string, relativePath: string): string {
+async function resolveWorkspacePath(workspaceRoot: string, relativePath: string): Promise<string> {
   const root = resolve(workspaceRoot);
   const absolutePath = resolve(root, relativePath);
   if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {
     throw new Error(`Path escapes workspace root: ${relativePath}`);
   }
-  return absolutePath;
+
+  const [realRoot, realAbsolutePath] = await Promise.all([
+    realpath(root).catch(() => root),
+    realpath(absolutePath).catch(() => absolutePath)
+  ]);
+  if (
+    realAbsolutePath !== realRoot &&
+    !realAbsolutePath.startsWith(`${realRoot}${sep}`)
+  ) {
+    throw new Error(`Path escapes workspace root through symlink: ${relativePath}`);
+  }
+  return realAbsolutePath;
 }

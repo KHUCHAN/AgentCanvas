@@ -1,0 +1,5 @@
+<svg viewBox="0 0 200 32" width="200" height="32" xmlns="http://www.w3.org/2000/svg">
+  <defs><pattern id="cross" width="12" height="12" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="12" stroke="#d95c4f" stroke-width="1" opacity="0.15"/><line x1="0" y1="0" x2="12" y2="0" stroke="#d95c4f" stroke-width="1" opacity="0.15"/></pattern></defs>
+  <rect width="200" height="32" rx="8" fill="#d95c4f" opacity="0.12"/>
+  <rect width="200" height="32" rx="8" fill="url(#cross)"/>
+</svg>

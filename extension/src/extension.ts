@@ -22,8 +22,11 @@ import {
   unassignMcpFromAgent,
   unassignSkillFromAgent
 } from "./services/agentProfileService";
-import { detectAllCliBackends, pickPromptBackend } from "./services/cliDetector";
+import { detectAllCliBackends, pickPromptBackend, testBackend } from "./services/cliDetector";
 import { executeCliPrompt } from "./services/cliExecutor";
+import { buildAnnounce } from "./services/announceService";
+import { appendCollabEvent, generateCollabReport, readCollabEvents } from "./services/collaborationLogger";
+import { reviewProposal } from "./services/reviewGate";
 import { runDiscovery } from "./services/discovery";
 import {
   listFlows as listFlowFiles,
@@ -32,11 +35,13 @@ import {
   saveFlow as saveFlowFile,
   sanitizeFlowName
 } from "./services/flowStore";
+import { logCacheEvent } from "./services/cacheDiagnostics";
+import { loadConfig, saveConfig } from "./services/configService";
 import { exists, getHomeDir } from "./services/pathUtils";
 import { appendPromptHistory, findPromptHistory, markPromptHistoryApplied, readPromptHistory, removePromptHistory } from "./services/promptHistory";
-import { buildAgentGenerationPrompt } from "./services/promptBuilder";
-import { createProposal } from "./services/proposalService";
-import { resolveAgentCwd } from "./services/agentRuntimeService";
+import { buildAgentGenerationPrompt, buildCachedPrompt } from "./services/promptBuilder";
+import { applyProposal, createProposal } from "./services/proposalService";
+import { resolveAgentRuntime } from "./services/agentRuntimeService";
 import { clearPin, getPin, setPin } from "./services/pinStore";
 import {
   appendRunEvent,
@@ -45,8 +50,30 @@ import {
   loadRunEvents,
   startRun
 } from "./services/runStore";
+import { resolveModel } from "./services/modelRouter";
+import { TokenTracker } from "./services/tokenTracker";
+import { calculateUsageCost } from "./services/costCalculator";
+import { buildContextPacket } from "./services/contextPacker";
+import { extractMemories } from "./services/memoryExtractor";
+import {
+  assertDirectedCommunicationAllowed,
+  assertHandoffPathsWithinScope,
+  assertRuntimeInteractionContract,
+  assertValidHandoffEnvelope,
+  buildTaskTimeoutIndex
+} from "./services/interactionValidation";
+import {
+  addMemoryItem,
+  checkoutMemoryCommit,
+  getMemoryItem,
+  listMemoryCommits,
+  listMemoryItems,
+  supersedeMemoryItem
+} from "./services/memoryStore";
+import { queryMemory } from "./services/memoryQuery";
 import { updateSkillFrontmatter } from "./services/skillEditor";
-import { prepareSandbox, type PrepareSandboxResult } from "./services/sandboxService";
+import { buildSessionId, splitSessionFlow, withSessionFlow } from "./services/sessionService";
+import { getSandboxPaths, prepareSandbox, type PrepareSandboxResult } from "./services/sandboxService";
 import { exportSkillPack, importSkillPack, previewSkillPack } from "./services/zipPack";
 import { ScheduleService } from "./schedule/scheduleService";
 import type {
@@ -61,46 +88,58 @@ import type {
   CliBackendOverrides,
   DiscoverySnapshot,
   GeneratedAgentStructure,
+  InteractionEdgeData,
   Task,
   TaskEvent,
   StudioEdge,
-  StickyNote
+  StickyNote,
+  HandoffEnvelope,
+  SessionContext
 } from "./types";
 
-let panelController: AgentCanvasPanel | undefined;
+const panelControllers = new Map<string, AgentCanvasPanel>();
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("agentCanvas.open", async () => {
-      panelController = await AgentCanvasPanel.createOrShow(context);
+      await AgentCanvasPanel.createOrShow(context);
     })
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("agentCanvas.refresh", async () => {
-      panelController = await AgentCanvasPanel.createOrShow(context);
-      await panelController.refreshState(true);
+      const controller = await AgentCanvasPanel.createOrShow(context);
+      await controller.refreshState(true);
     })
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("agentCanvas.demoScheduleRun", async () => {
-      panelController = await AgentCanvasPanel.createOrShow(context);
-      await panelController.startDemoScheduleRun();
+      const controller = await AgentCanvasPanel.createOrShow(context);
+      await controller.startDemoScheduleRun();
     })
   );
 }
 
 export function deactivate(): void {
-  panelController = undefined;
+  panelControllers.clear();
 }
 
 class AgentCanvasPanel {
   private static readonly viewType = "agentCanvas.panel";
+  private readonly controllerId = randomBytes(8).toString("hex");
   private readonly providers: Provider[];
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionContext: vscode.ExtensionContext;
-  private readonly scheduleService = new ScheduleService({ defaultEstimateMs: 120_000 });
+  private readonly scheduleService = new ScheduleService({
+    defaultEstimateMs: 120_000,
+    emitThrottleMs: 50,
+    agentConcurrency: Math.max(
+      1,
+      vscode.workspace.getConfiguration("agentCanvas").get<number>("agentConcurrency", 1)
+    )
+  });
+  private readonly tokenTracker = new TokenTracker();
   private snapshot: DiscoverySnapshot | undefined;
   private notes: StickyNote[] = [];
   private notesLoaded = false;
@@ -117,6 +156,7 @@ class AgentCanvasPanel {
     this.panel = panel;
     this.extensionContext = extensionContext;
     this.providers = [new AgentSkillsProvider(), new CodexGuidanceProvider()];
+    panelControllers.set(this.controllerId, this);
 
     this.panel.onDidDispose(() => {
       for (const [runId, subscriber] of this.scheduleSubscriberByRunId.entries()) {
@@ -129,9 +169,7 @@ class AgentCanvasPanel {
       this.demoRunTimers.clear();
       this.activeRunStops.clear();
       this.activeRunFlowById.clear();
-      if (panelController === this) {
-        panelController = undefined;
-      }
+      panelControllers.delete(this.controllerId);
     });
 
     this.panel.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => {
@@ -159,9 +197,10 @@ class AgentCanvasPanel {
   }
 
   public static async createOrShow(context: vscode.ExtensionContext): Promise<AgentCanvasPanel> {
-    if (panelController) {
-      panelController.panel.reveal(vscode.ViewColumn.One);
-      return panelController;
+    const existing = panelControllers.values().next().value as AgentCanvasPanel | undefined;
+    if (existing) {
+      existing.panel.reveal(vscode.ViewColumn.One);
+      return existing;
     }
 
     const panel = vscode.window.createWebviewPanel(
@@ -178,7 +217,6 @@ class AgentCanvasPanel {
     );
 
     const controller = new AgentCanvasPanel(panel, context);
-    panelController = controller;
     await controller.ensureNotesLoaded();
     panel.webview.html = await controller.buildWebviewHtml();
     await controller.refreshState(true);
@@ -321,11 +359,11 @@ class AgentCanvasPanel {
         return { ok: true };
       }
       case "ENSURE_ROOT_AGENTS":
-      {
-        const agentsPath = await this.ensureRootAgents();
-        await this.refreshState();
-        return { path: agentsPath };
-      }
+        {
+          const agentsPath = await this.ensureRootAgents();
+          await this.refreshState();
+          return { path: agentsPath };
+        }
       case "OPEN_COMMON_RULES_FOLDER": {
         const folderPath = await this.openCommonRulesFolder();
         return { path: folderPath };
@@ -447,11 +485,26 @@ class AgentCanvasPanel {
         });
         return { backends };
       }
+      case "TEST_BACKEND": {
+        const backends = await this.detectCliBackends();
+        const result = await testBackend({
+          backends,
+          backendId: message.payload.backendId,
+          workspacePath: this.getWorkspaceRoot()
+        });
+        return { result };
+      }
       case "GENERATE_AGENT_STRUCTURE": {
         try {
           const snapshot = await this.ensureSnapshot();
           const backends = await this.detectCliBackends();
           const backend = pickPromptBackend(backends, message.payload.backendId);
+          const cacheConfig = await loadConfig(this.getWorkspaceRoot());
+          const modelId = resolveModel({
+            agent: undefined,
+            taskType: "generation",
+            config: cacheConfig
+          });
 
           this.postGenerationProgress("building_prompt", `Building prompt for ${backend.displayName}`, 15);
           const fullPrompt = buildAgentGenerationPrompt({
@@ -466,6 +519,7 @@ class AgentCanvasPanel {
             backend,
             prompt: fullPrompt,
             workspacePath: this.getWorkspaceRoot(),
+            modelId,
             timeoutMs: 120_000
           });
           if (!result.success) {
@@ -591,6 +645,14 @@ class AgentCanvasPanel {
         );
         return { ok: true };
       }
+      case "TASK_SET_STATUS": {
+        await this.setTaskStatus(
+          message.payload.runId,
+          message.payload.taskId,
+          message.payload.status
+        );
+        return { ok: true };
+      }
       case "TASK_SET_PRIORITY": {
         await this.setTaskPriority(
           message.payload.runId,
@@ -605,7 +667,8 @@ class AgentCanvasPanel {
           backendId: message.payload.backendId,
           runName: message.payload.runName,
           tags: message.payload.tags,
-          usePinnedOutputs: message.payload.usePinnedOutputs
+          usePinnedOutputs: message.payload.usePinnedOutputs,
+          session: message.payload.session
         });
       }
       case "RUN_NODE": {
@@ -613,8 +676,12 @@ class AgentCanvasPanel {
           flowName: message.payload.flowName,
           nodeId: message.payload.nodeId,
           backendId: message.payload.backendId,
-          usePinnedOutput: message.payload.usePinnedOutput
+          usePinnedOutput: message.payload.usePinnedOutput,
+          session: message.payload.session
         });
+      }
+      case "REPLAY_RUN": {
+        return await this.replayRun(message.payload.runId, message.payload.modifiedPrompts);
       }
       case "STOP_RUN": {
         await this.stopRun(message.payload.runId);
@@ -657,9 +724,237 @@ class AgentCanvasPanel {
         });
         return { ok: true };
       }
+      case "APPLY_PROPOSAL": {
+        return await this.applyProposalForAgent(message.payload.runId, message.payload.agentId);
+      }
+      case "REJECT_PROPOSAL": {
+        return await this.rejectProposalForAgent(
+          message.payload.runId,
+          message.payload.agentId,
+          message.payload.reason
+        );
+      }
+      case "INSERT_PATTERN": {
+        return {
+          ok: true,
+          patternId: message.payload.patternId,
+          anchor: message.payload.anchor
+        };
+      }
+      case "CONFIGURE_INTERACTION_EDGE": {
+        await this.configureInteractionEdge(
+          message.payload.edgeId,
+          message.payload.label,
+          message.payload.data
+        );
+        return { ok: true };
+      }
+      case "HANDOFF_RECEIVED": {
+        const snapshot = await this.ensureSnapshot();
+        const sandboxPaths = getSandboxPaths({
+          workspaceRoot: this.getWorkspaceRoot(),
+          runId: message.payload.runId,
+          agentId: message.payload.fromAgentId
+        });
+        assertDirectedCommunicationAllowed({
+          edges: snapshot.edges,
+          fromAgentId: message.payload.fromAgentId,
+          toAgentId: message.payload.toAgentId
+        });
+        assertValidHandoffEnvelope({
+          handoff: message.payload.handoff
+        });
+        assertHandoffPathsWithinScope({
+          handoff: message.payload.handoff,
+          workspaceRoot: this.getWorkspaceRoot(),
+          sandboxRootDir: sandboxPaths.rootDir
+        });
+        await this.handleHandoffReceived(
+          message.payload.runId,
+          message.payload.fromAgentId,
+          message.payload.toAgentId,
+          message.payload.handoff
+        );
+        return { ok: true };
+      }
+      case "GET_COLLAB_LOG": {
+        const flowName = await this.resolveFlowNameForRun(message.payload.runId);
+        const events = await readCollabEvents({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName,
+          runId: message.payload.runId
+        });
+        return { events };
+      }
+      case "GET_COLLAB_REPORT_MD": {
+        const flowName = await this.resolveFlowNameForRun(message.payload.runId);
+        const report = await generateCollabReport({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName,
+          runId: message.payload.runId
+        });
+        return { report };
+      }
+      case "MANUAL_REVIEW": {
+        const flowName = await this.resolveFlowNameForRun(message.payload.runId);
+        const now = Date.now();
+        const review = {
+          runId: message.payload.runId,
+          taskId: message.payload.taskId,
+          decision: message.payload.decision,
+          reason: message.payload.reason,
+          appliedAt: message.payload.decision === "apply" ? now : undefined
+        };
+        await appendRunEvent({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName,
+          event: {
+            ts: now,
+            flow: flowName,
+            runId: message.payload.runId,
+            type: "proposal_reviewed",
+            provenance: "system",
+            actor: "user",
+            payload: review
+          }
+        });
+        await appendCollabEvent({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName,
+          runId: message.payload.runId,
+          event: "proposal_reviewed",
+          actor: "user",
+          provenance: "system",
+          payload: review
+        });
+        this.postMessage({
+          type: "COLLAB_EVENT",
+          payload: {
+            event: "proposal_reviewed",
+            runId: message.payload.runId,
+            flowName,
+            actor: "user",
+            provenance: "system",
+            data: review,
+            ts: now
+          }
+        });
+        return { review };
+      }
+      case "GET_MEMORY_ITEMS": {
+        const payload = "payload" in message ? message.payload : undefined;
+        const items = await listMemoryItems({
+          workspaceRoot: this.getWorkspaceRoot(),
+          namespace: payload?.namespace,
+          type: payload?.type,
+          limit: payload?.limit ?? 100
+        });
+        return { items };
+      }
+      case "SEARCH_MEMORY": {
+        const result = await queryMemory({
+          workspaceRoot: this.getWorkspaceRoot(),
+          text: message.payload.query,
+          namespaces: message.payload.namespaces ?? ["shared"],
+          budgetTokens: message.payload.budgetTokens ?? 1200
+        });
+        this.postMessage({
+          type: "MEMORY_QUERY_RESULT",
+          payload: result
+        });
+        return { result };
+      }
+      case "ADD_MEMORY_ITEM": {
+        const item = await addMemoryItem({
+          workspaceRoot: this.getWorkspaceRoot(),
+          item: message.payload.item,
+          author: "user"
+        });
+        this.postMessage({
+          type: "MEMORY_UPDATED",
+          payload: {
+            item,
+            action: "added"
+          }
+        });
+        return { item };
+      }
+      case "SUPERSEDE_MEMORY": {
+        const current = await getMemoryItem(this.getWorkspaceRoot(), message.payload.oldItemId);
+        if (!current) {
+          throw new Error(`Memory item not found: ${message.payload.oldItemId}`);
+        }
+        const result = await supersedeMemoryItem({
+          workspaceRoot: this.getWorkspaceRoot(),
+          oldItemId: current.id,
+          newItem: {
+            namespace: current.namespace,
+            type: current.type,
+            title: current.title,
+            content: message.payload.newContent,
+            source: current.source,
+            tags: current.tags,
+            importance: current.importance,
+            ttlMs: current.ttlMs
+          },
+          author: "user",
+          reason: message.payload.reason
+        });
+        this.postMessage({
+          type: "MEMORY_UPDATED",
+          payload: {
+            item: result.newItem,
+            action: "superseded"
+          }
+        });
+        return result;
+      }
+      case "MEMORY_CHECKOUT": {
+        const ok = await checkoutMemoryCommit({
+          workspaceRoot: this.getWorkspaceRoot(),
+          commitId: message.payload.commitId
+        });
+        return { ok };
+      }
+      case "GET_MEMORY_COMMITS": {
+        const payload = "payload" in message ? message.payload : undefined;
+        const commits = await listMemoryCommits(this.getWorkspaceRoot(), payload?.limit ?? 100);
+        return { commits };
+      }
+      case "GET_CACHE_METRICS": {
+        const metrics = this.tokenTracker.getSessionMetrics(message.payload.flowName);
+        this.postMessage({
+          type: "CACHE_METRICS_UPDATE",
+          payload: metrics
+        });
+        return { metrics };
+      }
+      case "RESET_CACHE_METRICS": {
+        const flowName = "payload" in message && message.payload ? message.payload.flowName : undefined;
+        this.tokenTracker.reset(flowName);
+        const metrics = this.tokenTracker.getSessionMetrics(flowName ?? "default");
+        this.postMessage({
+          type: "CACHE_METRICS_UPDATE",
+          payload: metrics
+        });
+        return { ok: true, metrics };
+      }
+      case "GET_CACHE_CONFIG": {
+        const config = await loadConfig(this.getWorkspaceRoot());
+        return { config };
+      }
+      case "UPDATE_CACHE_CONFIG": {
+        await saveConfig(this.getWorkspaceRoot(), message.payload);
+        return { ok: true };
+      }
       case "SET_AGENT_RUNTIME": {
         await this.setAgentRuntime(message.payload.agentId, message.payload.runtime);
         await this.refreshState();
+        return { ok: true };
+      }
+      case "SET_DEFAULT_BACKEND": {
+        const config = vscode.workspace.getConfiguration("agentCanvas");
+        await config.update("promptBackend", message.payload.backendId, vscode.ConfigurationTarget.Workspace);
         return { ok: true };
       }
       case "SET_BACKEND_OVERRIDES": {
@@ -690,8 +985,7 @@ class AgentCanvasPanel {
   }
 
   private async buildProviderContext(): Promise<ProviderContext> {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    const workspacePath = workspaceFolder?.uri.fsPath ?? process.cwd();
+    const workspacePath = this.getWorkspaceRoot();
     const chatConfig = vscode.workspace.getConfiguration("chat");
     const extraSkillLocations = chatConfig.get<string[]>("agentSkillsLocations", []);
 
@@ -903,10 +1197,7 @@ class AgentCanvasPanel {
       return undefined;
     }
 
-    const installDirDefault =
-      (this.snapshot?.agent.workspaceRoot
-        ? join(this.snapshot.agent.workspaceRoot, ".github", "skills")
-        : undefined) ?? process.cwd();
+    const installDirDefault = join(this.getWorkspaceRoot(), ".github", "skills");
 
     const preview = await previewSkillPack({
       zipPath: selectedZip,
@@ -1090,10 +1381,7 @@ class AgentCanvasPanel {
   }
 
   private getAgentLinksStorageKey(): string {
-    const workspacePath =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
-      this.snapshot?.agent.workspaceRoot ??
-      process.cwd();
+    const workspacePath = this.getWorkspaceRoot();
     return `agentCanvas.agentLinks:${workspacePath}`;
   }
 
@@ -1145,10 +1433,7 @@ class AgentCanvasPanel {
   }
 
   private getNodePositionsStorageKey(): string {
-    const workspacePath =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
-      this.snapshot?.agent.workspaceRoot ??
-      process.cwd();
+    const workspacePath = this.getWorkspaceRoot();
     return `agentCanvas.nodePositions:${workspacePath}`;
   }
 
@@ -1190,10 +1475,7 @@ class AgentCanvasPanel {
   }
 
   private getNotesStorageKey(): string {
-    const workspacePath =
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
-      this.snapshot?.agent.workspaceRoot ??
-      process.cwd();
+    const workspacePath = this.getWorkspaceRoot();
     return `agentCanvas.notes:${workspacePath}`;
   }
 
@@ -1256,7 +1538,7 @@ class AgentCanvasPanel {
       filters: {
         "Zip Archive": ["zip"]
       },
-      defaultUri: vscode.Uri.file(join(process.cwd(), "agent-skill-pack.zip"))
+      defaultUri: vscode.Uri.file(join(this.getWorkspaceRoot(), "agent-skill-pack.zip"))
     });
     return uri?.fsPath;
   }
@@ -1288,11 +1570,24 @@ class AgentCanvasPanel {
   }
 
   private getWorkspaceRoot(): string {
-    return (
-      this.snapshot?.agent.workspaceRoot ??
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+    const candidates = [
+      this.snapshot?.agent.workspaceRoot,
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
       process.cwd()
-    );
+    ];
+
+    for (const candidate of candidates) {
+      const raw = candidate?.trim();
+      if (!raw) {
+        continue;
+      }
+      const resolvedPath = resolve(raw);
+      if (dirname(resolvedPath) !== resolvedPath) {
+        return resolvedPath;
+      }
+    }
+
+    return join(this.extensionContext.globalStorageUri.fsPath, "workspace");
   }
 
   private requireAgent(agentId: string): AgentProfile {
@@ -1663,18 +1958,215 @@ class AgentCanvasPanel {
     this.scheduleService.recompute(runId);
   }
 
+  private async setTaskStatus(runId: string, taskId: string, status: Task["status"]): Promise<void> {
+    const now = Date.now();
+    const patch: Partial<Task> = {
+      status
+    };
+    if (status === "running") {
+      patch.actualStartMs = now;
+      patch.blocker = undefined;
+    }
+    if (status === "done") {
+      patch.actualEndMs = now;
+      patch.progress = 1;
+      patch.blocker = undefined;
+    }
+    if (status === "failed" || status === "blocked" || status === "canceled") {
+      patch.actualEndMs = now;
+    }
+    this.scheduleService.patchTask(runId, taskId, patch);
+    this.scheduleService.recompute(runId);
+  }
+
+  private async applyProposalForAgent(
+    runId: string,
+    agentId: string
+  ): Promise<{ ok: true; applied: boolean }> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const flowName = this.activeRunFlowById.get(runId) ?? "default";
+    const result = await applyProposal({
+      workspaceRoot,
+      runId,
+      agentId
+    });
+
+    await appendRunEvent({
+      workspaceRoot,
+      flowName,
+      event: {
+        ts: Date.now(),
+        flow: flowName,
+        runId,
+        type: "proposal_applied",
+        provenance: "system",
+        actor: "user",
+        payload: {
+          agentId,
+          applied: result.applied,
+          patchPath: result.patchPath,
+          proposalJsonPath: result.proposalJsonPath,
+          changedFiles: result.changedFiles
+        },
+        message: "proposal_applied"
+      }
+    });
+    await appendCollabEvent({
+      workspaceRoot,
+      flowName,
+      runId,
+      event: "proposal_reviewed",
+      actor: "user",
+      provenance: "system",
+      payload: {
+        decision: "apply",
+        agentId,
+        changedFiles: result.changedFiles
+      }
+    });
+    this.postMessage({
+      type: "COLLAB_EVENT",
+      payload: {
+        event: "proposal_reviewed",
+        runId,
+        flowName,
+        actor: "user",
+        provenance: "system",
+        data: {
+          decision: "apply",
+          agentId,
+          changedFiles: result.changedFiles
+        },
+        ts: Date.now()
+      }
+    });
+
+    return { ok: true, applied: result.applied };
+  }
+
+  private async rejectProposalForAgent(
+    runId: string,
+    agentId: string,
+    reason?: string
+  ): Promise<{ ok: true }> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const flowName = this.activeRunFlowById.get(runId) ?? "default";
+
+    await appendRunEvent({
+      workspaceRoot,
+      flowName,
+      event: {
+        ts: Date.now(),
+        flow: flowName,
+        runId,
+        type: "proposal_rejected",
+        provenance: "system",
+        actor: "user",
+        payload: {
+          agentId,
+          reason: reason?.trim() || "rejected_by_user"
+        },
+        message: "proposal_rejected"
+      }
+    });
+    await appendCollabEvent({
+      workspaceRoot,
+      flowName,
+      runId,
+      event: "proposal_reviewed",
+      actor: "user",
+      provenance: "system",
+      payload: {
+        decision: "reject",
+        agentId,
+        reason: reason?.trim() || "rejected_by_user"
+      }
+    });
+    this.postMessage({
+      type: "COLLAB_EVENT",
+      payload: {
+        event: "proposal_reviewed",
+        runId,
+        flowName,
+        actor: "user",
+        provenance: "system",
+        data: {
+          decision: "reject",
+          agentId,
+          reason: reason?.trim() || "rejected_by_user"
+        },
+        ts: Date.now()
+      }
+    });
+    return { ok: true };
+  }
+
+  private async configureInteractionEdge(
+    edgeId: string,
+    label: string | undefined,
+    data: InteractionEdgeData
+  ): Promise<void> {
+    if (!data || !data.termination || typeof data.termination.type !== "string") {
+      throw new Error("Interaction edge configuration requires termination");
+    }
+    await this.logInteractionEvent({
+      flowName: "default",
+      interactionId: data.patternId || "interaction",
+      edgeId,
+      event: "configured",
+      data: {
+        label,
+        ...data
+      }
+    });
+  }
+
+  private async handleHandoffReceived(
+    runId: string,
+    fromAgentId: string,
+    toAgentId: string,
+    handoff: HandoffEnvelope
+  ): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const flowName = this.activeRunFlowById.get(runId) ?? "default";
+    await appendRunEvent({
+      workspaceRoot,
+      flowName,
+      event: {
+        ts: Date.now(),
+        flow: flowName,
+        runId,
+        type: "run_log",
+        message: "handoff_received",
+        meta: {
+          fromAgentId,
+          toAgentId,
+          handoff
+        }
+      }
+    });
+  }
+
   private async runFlow(input: {
     flowName: string;
     backendId?: CliBackendId;
     runName?: string;
     tags?: string[];
     usePinnedOutputs?: boolean;
+    session?: SessionContext;
   }): Promise<{ runId: string; flowName: string; taskCount: number }> {
     const workspaceRoot = this.getWorkspaceRoot();
-    const flow = await this.tryLoadFlowDefinition(input.flowName);
+    const requested = splitSessionFlow(input.flowName);
+    const flow = await this.tryLoadFlowDefinition(requested.flowName);
+    assertRuntimeInteractionContract({
+      nodes: flow.nodes,
+      edges: flow.edges
+    });
+    const sessionId = buildSessionId(flow.flowName, input.session) ?? requested.sessionId;
+    const flowNameForRun = withSessionFlow(flow.flowName, sessionId);
     const run = await startRun({
       workspaceRoot,
-      flowName: flow.flowName,
+      flowName: flowNameForRun,
       backendId: input.backendId ?? "auto",
       runName: input.runName,
       tags: input.tags
@@ -1682,11 +2174,11 @@ class AgentCanvasPanel {
 
     const tasks = this.buildTasksFromFlow(run.runId, flow.nodes, flow.edges);
     this.scheduleService.createRun(run.runId, tasks);
-    this.activeRunFlowById.set(run.runId, flow.flowName);
+    this.activeRunFlowById.set(run.runId, flowNameForRun);
 
     void this.executeRunLoop({
       runId: run.runId,
-      flowName: flow.flowName,
+      flowName: flowNameForRun,
       nodes: flow.nodes,
       edges: flow.edges,
       requestedBackendId: input.backendId,
@@ -1698,7 +2190,7 @@ class AgentCanvasPanel {
 
     return {
       runId: run.runId,
-      flowName: flow.flowName,
+      flowName: flowNameForRun,
       taskCount: tasks.length
     };
   }
@@ -1708,9 +2200,13 @@ class AgentCanvasPanel {
     nodeId: string;
     backendId?: CliBackendId;
     usePinnedOutput?: boolean;
+    session?: SessionContext;
   }): Promise<{ runId: string; flowName: string; nodeId: string }> {
     const workspaceRoot = this.getWorkspaceRoot();
-    const flow = await this.tryLoadFlowDefinition(input.flowName);
+    const requested = splitSessionFlow(input.flowName);
+    const flow = await this.tryLoadFlowDefinition(requested.flowName);
+    const sessionId = buildSessionId(flow.flowName, input.session) ?? requested.sessionId;
+    const flowNameForRun = withSessionFlow(flow.flowName, sessionId);
     const node = flow.nodes.find((item) => item.id === input.nodeId);
     if (!node) {
       throw new Error(`Node not found in flow: ${input.nodeId}`);
@@ -1718,7 +2214,7 @@ class AgentCanvasPanel {
 
     const run = await startRun({
       workspaceRoot,
-      flowName: flow.flowName,
+      flowName: flowNameForRun,
       backendId: input.backendId ?? "auto",
       runName: `Single node: ${input.nodeId}`
     });
@@ -1739,11 +2235,11 @@ class AgentCanvasPanel {
       }
     };
     this.scheduleService.createRun(run.runId, [task]);
-    this.activeRunFlowById.set(run.runId, flow.flowName);
+    this.activeRunFlowById.set(run.runId, flowNameForRun);
 
     void this.executeRunLoop({
       runId: run.runId,
-      flowName: flow.flowName,
+      flowName: flowNameForRun,
       nodes: [node],
       edges: [],
       requestedBackendId: input.backendId,
@@ -1753,7 +2249,61 @@ class AgentCanvasPanel {
       this.toast("error", `Run failed: ${detail}`);
     });
 
-    return { runId: run.runId, flowName: flow.flowName, nodeId: input.nodeId };
+    return { runId: run.runId, flowName: flowNameForRun, nodeId: input.nodeId };
+  }
+
+  private async replayRun(
+    sourceRunId: string,
+    modifiedPrompts?: Record<string, string>
+  ): Promise<{ runId: string; flowName: string; taskCount: number; sourceRunId: string }> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const history = await listRunHistory({
+      workspaceRoot,
+      limit: 500
+    });
+    const source = history.find((run) => run.runId === sourceRunId);
+    if (!source) {
+      throw new Error(`Run not found: ${sourceRunId}`);
+    }
+
+    const sourceFlow = splitSessionFlow(source.flow);
+    const flow = await this.tryLoadFlowDefinition(sourceFlow.flowName);
+    assertRuntimeInteractionContract({
+      nodes: flow.nodes,
+      edges: flow.edges
+    });
+    const replayFlowName = withSessionFlow(flow.flowName, sourceFlow.sessionId);
+    const run = await startRun({
+      workspaceRoot,
+      flowName: replayFlowName,
+      backendId: source.backendId ?? "auto",
+      runName: `Replay: ${source.runName ?? source.runId}`,
+      tags: source.tags
+    });
+
+    const tasks = this.buildTasksFromFlow(run.runId, flow.nodes, flow.edges);
+    this.scheduleService.createRun(run.runId, tasks);
+    this.activeRunFlowById.set(run.runId, replayFlowName);
+
+    void this.executeRunLoop({
+      runId: run.runId,
+      flowName: replayFlowName,
+      nodes: flow.nodes,
+      edges: flow.edges,
+      requestedBackendId: source.backendId,
+      usePinnedOutputs: true,
+      promptOverrides: modifiedPrompts
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.toast("error", `Replay failed: ${detail}`);
+    });
+
+    return {
+      runId: run.runId,
+      flowName: replayFlowName,
+      taskCount: tasks.length,
+      sourceRunId
+    };
   }
 
   private async stopRun(runId: string): Promise<void> {
@@ -1780,13 +2330,19 @@ class AgentCanvasPanel {
     edges: DiscoverySnapshot["edges"];
     requestedBackendId?: CliBackendId;
     usePinnedOutputs?: boolean;
+    promptOverrides?: Record<string, string>;
   }): Promise<void> {
     const workspaceRoot = this.getWorkspaceRoot();
     const taskOutputs = new Map<string, unknown>();
     const nodeById = new Map(input.nodes.map((node) => [node.id, node] as const));
     const snapshotAgents = this.snapshot?.agents ?? [];
     const agentById = new Map(snapshotAgents.map((agent) => [agent.id, agent] as const));
+    const orchestratorId =
+      snapshotAgents.find((agent) => agent.isOrchestrator)?.id ??
+      this.snapshot?.agent.id ??
+      "system";
     const sandboxByAgentId = new Map<string, PrepareSandboxResult>();
+    const cacheConfig = await loadConfig(workspaceRoot);
     let stopped = false;
     let failedMessage: string | undefined;
 
@@ -1797,7 +2353,23 @@ class AgentCanvasPanel {
 
     const idlePollMs = 500;
     const stallTimeoutMs = 10_000;
+    const defaultTaskTimeoutMs = 120_000;
     let stalledSinceMs: number | undefined;
+    const interactionEdges = input.edges.filter((edge) => edge.type === "interaction");
+    const taskTimeoutByNodeId = buildTaskTimeoutIndex({
+      edges: interactionEdges,
+      defaultTimeoutMs: defaultTaskTimeoutMs
+    });
+
+    for (const edge of interactionEdges) {
+      await this.logInteractionEvent({
+        flowName: input.flowName,
+        interactionId: String((edge.data as Record<string, unknown> | undefined)?.patternId ?? edge.id),
+        edgeId: edge.id,
+        event: "configured",
+        data: edge.data as Record<string, unknown> | undefined
+      });
+    }
 
     try {
       while (true) {
@@ -1898,6 +2470,47 @@ class AgentCanvasPanel {
           actualStartMs: Date.now(),
           progress: 0
         });
+        const dispatchedAt = Date.now();
+        const taskDispatchPayload = {
+          taskId: nextTask.id,
+          title: nextTask.title,
+          from: orchestratorId,
+          to: nextTask.agentId
+        };
+        await appendRunEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          event: {
+            ts: dispatchedAt,
+            flow: input.flowName,
+            runId: input.runId,
+            type: "task_dispatched",
+            provenance: "orchestrator_to_worker",
+            actor: orchestratorId,
+            payload: taskDispatchPayload
+          }
+        });
+        await appendCollabEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          runId: input.runId,
+          event: "task_dispatched",
+          actor: orchestratorId,
+          provenance: "orchestrator_to_worker",
+          payload: taskDispatchPayload
+        });
+        this.postMessage({
+          type: "COLLAB_EVENT",
+          payload: {
+            event: "task_dispatched",
+            runId: input.runId,
+            flowName: input.flowName,
+            actor: orchestratorId,
+            provenance: "orchestrator_to_worker",
+            data: taskDispatchPayload,
+            ts: dispatchedAt
+          }
+        });
         await appendRunEvent({
           workspaceRoot,
           flowName: input.flowName,
@@ -1916,10 +2529,10 @@ class AgentCanvasPanel {
         const pinned =
           input.usePinnedOutputs && nextTask.meta?.nodeId
             ? await getPin({
-                workspaceRoot,
-                flowName: input.flowName,
-                nodeId: String(nextTask.meta.nodeId)
-              })
+              workspaceRoot,
+              flowName: input.flowName,
+              nodeId: String(nextTask.meta.nodeId)
+            })
             : undefined;
 
         if (pinned) {
@@ -1954,7 +2567,12 @@ class AgentCanvasPanel {
 
         const node = nodeById.get(String(nextTask.meta?.nodeId ?? ""));
         const taskAgent = node?.type === "agent" ? agentById.get(node.id) : undefined;
-        let executionCwd = resolveAgentCwd(taskAgent, workspaceRoot);
+        let runtimeResolution = resolveAgentRuntime({
+          agent: taskAgent,
+          workspaceRoot,
+          requestedBackendId: input.requestedBackendId
+        });
+        let executionCwd = runtimeResolution.cwd;
         let proposalAgentId: string | undefined;
         if (taskAgent?.runtime?.kind === "cli" && taskAgent.runtime.cwdMode === "agentHome") {
           let sandbox = sandboxByAgentId.get(taskAgent.id);
@@ -1985,17 +2603,121 @@ class AgentCanvasPanel {
               }
             });
           }
-          executionCwd = resolveAgentCwd(taskAgent, workspaceRoot, sandbox.workDir);
+          runtimeResolution = resolveAgentRuntime({
+            agent: taskAgent,
+            workspaceRoot,
+            requestedBackendId: runtimeResolution.backendId ?? input.requestedBackendId,
+            agentHomeOverride: sandbox.workDir
+          });
+          executionCwd = runtimeResolution.cwd;
           proposalAgentId = taskAgent.id;
         }
 
-        const backend = await this.resolveBackendForTask(input.requestedBackendId, node);
-        const prompt = this.buildTaskPrompt(nextTask, node, taskOutputs, input.flowName);
+        const modelId = resolveModel({
+          agent: taskAgent,
+          taskType: "execution",
+          config: cacheConfig
+        });
+        const backend = await this.resolveBackendForTask(
+          runtimeResolution.backendId ?? input.requestedBackendId,
+          node,
+          runtimeResolution
+        );
+        const contextPacket = taskAgent
+          ? await buildContextPacket({
+            workspaceRoot,
+            taskInstruction: nextTask.title,
+            agentId: taskAgent.id,
+            flowName: input.flowName,
+            budgetTokens: 1800
+          })
+          : undefined;
+        if (contextPacket) {
+          this.postMessage({
+            type: "CONTEXT_PACKET_BUILT",
+            payload: {
+              taskId: nextTask.id,
+              packet: contextPacket
+            }
+          });
+          await appendRunEvent({
+            workspaceRoot,
+            flowName: input.flowName,
+            event: {
+              ts: Date.now(),
+              flow: input.flowName,
+              runId: input.runId,
+              type: "memory_injected",
+              nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+              provenance: "system",
+              actor: taskAgent?.id,
+              payload: {
+                taskId: nextTask.id,
+                sourceCount: contextPacket.sources.length,
+                totalTokens: contextPacket.totalTokens
+              }
+            }
+          });
+        }
+        const nodeId = String(nextTask.meta?.nodeId ?? nextTask.id);
+        const promptOverride = input.promptOverrides?.[nodeId];
+        const communicationPolicy = this.buildCommunicationPolicy(node?.id, input.nodes, input.edges);
+        const prompt = this.buildTaskPrompt(
+          nextTask,
+          node,
+          taskOutputs,
+          input.flowName,
+          taskAgent,
+          contextPacket,
+          promptOverride,
+          communicationPolicy
+        );
         const result = await executeCliPrompt({
           backend,
           prompt,
           workspacePath: executionCwd,
-          timeoutMs: 120_000
+          modelId,
+          timeoutMs:
+            taskTimeoutByNodeId.get(String(nextTask.meta?.nodeId ?? "")) ??
+            defaultTaskTimeoutMs
+        });
+        const usageCost = calculateUsageCost(result.usage, modelId);
+        const usage = result.usage
+          ? {
+            ...result.usage,
+            ...usageCost,
+            model: result.usage.model ?? usageCost.model
+          }
+          : undefined;
+
+        const metrics = this.tokenTracker.recordUsage({
+          flowName: input.flowName,
+          usage,
+          modelHint: modelId
+        });
+        this.postMessage({
+          type: "CACHE_METRICS_UPDATE",
+          payload: metrics
+        });
+        const contextSize = this.tokenTracker.getContextSize(input.flowName);
+        const warningThreshold = Math.min(150_000, cacheConfig.contextThreshold);
+        if (contextSize >= warningThreshold) {
+          this.postMessage({
+            type: "CONTEXT_THRESHOLD_WARNING",
+            payload: {
+              current: contextSize,
+              threshold: cacheConfig.contextThreshold
+            }
+          });
+        }
+        await logCacheEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          runId: input.runId,
+          nodeId: node?.id,
+          usage,
+          model: modelId,
+          config: cacheConfig
         });
 
         if (result.success) {
@@ -2019,12 +2741,71 @@ class AgentCanvasPanel {
               type: "node_output",
               nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
               output: result.output,
+              usage,
               meta: {
                 backendId: backend.id,
                 durationMs: result.durationMs
               }
             }
           });
+
+          // Check for Handoff before finishing the task.
+          const handoffMatch = parseHandoffBlock(result.output, orchestratorId, input.nodes, input.edges);
+          if (handoffMatch) {
+            const { targetAgentId, targetAgentName, handoff } = handoffMatch;
+            this.postMessage({
+              type: "TOAST",
+              payload: {
+                level: "info",
+                message: `Handoff requested to ${targetAgentName} (${targetAgentId}).`
+              }
+            });
+
+            // Log HANDOFF_RECEIVED internal representation.
+            await this.handleHandoffReceived(
+              input.runId,
+              orchestratorId,
+              targetAgentId,
+              handoff
+            );
+
+            // Create a new task for the target agent.
+            const newTaskId = `task:${input.runId}:${targetAgentId}:${Date.now()}`;
+            const targetTask: Task = {
+              id: newTaskId,
+              title: handoff.intent || `Task assigned by ${orchestratorId}`,
+              agentId: targetAgentId,
+              deps: [nextTask.id], // Runs after this task
+              status: "planned",
+              createdAtMs: Date.now(),
+              updatedAtMs: Date.now(),
+              meta: {
+                nodeId: targetAgentId,
+                nodeType: "agent",
+                handoff
+              }
+            };
+            this.scheduleService.upsertTask(input.runId, targetTask);
+            this.scheduleService.recompute(input.runId);
+          }
+
+          for (const edge of interactionEdges) {
+            if (edge.source !== String(nextTask.meta?.nodeId ?? "")) {
+              continue;
+            }
+            await this.logInteractionEvent({
+              flowName: input.flowName,
+              interactionId: String((edge.data as Record<string, unknown> | undefined)?.patternId ?? edge.id),
+              edgeId: edge.id,
+              event: "step",
+              data: {
+                runId: input.runId,
+                taskId: nextTask.id,
+                status: "done",
+                outputPreview: typeof result.output === "string" ? result.output.slice(0, 200) : undefined
+              }
+            });
+          }
         } else {
           failedMessage = result.error || "CLI execution failed";
           this.scheduleService.patchTask(input.runId, nextTask.id, {
@@ -2049,16 +2830,61 @@ class AgentCanvasPanel {
               type: "node_failed",
               nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
               message: failedMessage,
+              usage,
               meta: {
                 backendId: backend.id,
                 durationMs: result.durationMs
               }
             }
           });
+          for (const edge of interactionEdges) {
+            if (edge.source !== String(nextTask.meta?.nodeId ?? "")) {
+              continue;
+            }
+            await this.logInteractionEvent({
+              flowName: input.flowName,
+              interactionId: String((edge.data as Record<string, unknown> | undefined)?.patternId ?? edge.id),
+              edgeId: edge.id,
+              event: "step",
+              data: {
+                runId: input.runId,
+                taskId: nextTask.id,
+                status: "failed",
+                error: failedMessage
+              }
+            });
+          }
+        }
+
+        if (taskAgent) {
+          const extracted = extractMemories({
+            taskOutput: result.success ? result.output : failedMessage ?? result.error ?? "",
+            taskTitle: nextTask.title,
+            agentId: taskAgent.id,
+            runId: input.runId,
+            taskId: nextTask.id,
+            flowName: input.flowName,
+            success: result.success
+          });
+          for (const draft of extracted) {
+            const saved = await addMemoryItem({
+              workspaceRoot,
+              item: draft,
+              author: taskAgent.id
+            });
+            this.postMessage({
+              type: "MEMORY_UPDATED",
+              payload: {
+                item: saved,
+                action: "added"
+              }
+            });
+          }
         }
 
         if (proposalAgentId) {
           const sandbox = sandboxByAgentId.get(proposalAgentId);
+          const proposalAgent = agentById.get(proposalAgentId);
           if (sandbox) {
             try {
               const proposal = await createProposal({
@@ -2069,23 +2895,206 @@ class AgentCanvasPanel {
                 allowedFiles: sandbox.copiedFiles,
                 notes: `Task: ${nextTask.title}`
               });
+              if (taskAgent && proposal.changedFiles.length > 0) {
+                const changedPaths = proposal.changedFiles.map((item) => item.path);
+                const extracted = extractMemories({
+                  taskOutput: result.success ? result.output : failedMessage ?? result.error ?? "",
+                  taskTitle: nextTask.title,
+                  agentId: taskAgent.id,
+                  runId: input.runId,
+                  taskId: nextTask.id,
+                  flowName: input.flowName,
+                  success: result.success,
+                  changedFiles: changedPaths,
+                  maxDrafts: 1
+                });
+                for (const draft of extracted) {
+                  const saved = await addMemoryItem({
+                    workspaceRoot,
+                    item: draft,
+                    author: taskAgent.id
+                  });
+                  this.postMessage({
+                    type: "MEMORY_UPDATED",
+                    payload: {
+                      item: saved,
+                      action: "added"
+                    }
+                  });
+                }
+              }
+              const submittedAt = Date.now();
+              const submittedPayload = {
+                taskId: nextTask.id,
+                summary: `${proposal.changedFiles.length} file(s) changed`,
+                proposalJsonPath: proposal.proposalJsonPath,
+                patchPath: proposal.patchPath,
+                changedFiles: proposal.changedFiles
+              };
               await appendRunEvent({
                 workspaceRoot,
                 flowName: input.flowName,
                 event: {
-                  ts: Date.now(),
+                  ts: submittedAt,
                   flow: input.flowName,
                   runId: input.runId,
-                  type: "run_log",
-                  message: "proposal_created",
-                  meta: {
-                    agentId: proposalAgentId,
-                    proposalJsonPath: proposal.proposalJsonPath,
-                    patchPath: proposal.patchPath,
-                    changedFiles: proposal.changedFiles
-                  }
+                  type: "proposal_submitted",
+                  provenance: "worker_proposal",
+                  actor: proposalAgentId,
+                  payload: submittedPayload
                 }
               });
+              await appendCollabEvent({
+                workspaceRoot,
+                flowName: input.flowName,
+                runId: input.runId,
+                event: "proposal_submitted",
+                actor: proposalAgentId,
+                provenance: "worker_proposal",
+                payload: submittedPayload
+              });
+              this.postMessage({
+                type: "COLLAB_EVENT",
+                payload: {
+                  event: "proposal_submitted",
+                  runId: input.runId,
+                  flowName: input.flowName,
+                  actor: proposalAgentId,
+                  provenance: "worker_proposal",
+                  data: submittedPayload,
+                  ts: submittedAt
+                }
+              });
+
+              if (proposalAgent) {
+                const announce = buildAnnounce({
+                  runId: input.runId,
+                  task: nextTask,
+                  agent: proposalAgent,
+                  proposal,
+                  durationMs: result.durationMs,
+                  error: result.success ? undefined : failedMessage
+                });
+                const announceAt = Date.now();
+                await appendRunEvent({
+                  workspaceRoot,
+                  flowName: input.flowName,
+                  event: {
+                    ts: announceAt,
+                    flow: input.flowName,
+                    runId: input.runId,
+                    type: "announce",
+                    provenance: "announce_internal",
+                    actor: proposalAgent.id,
+                    payload: announce
+                  }
+                });
+                await appendCollabEvent({
+                  workspaceRoot,
+                  flowName: input.flowName,
+                  runId: input.runId,
+                  event: "announce",
+                  actor: proposalAgent.id,
+                  provenance: "announce_internal",
+                  payload: announce
+                });
+                this.postMessage({
+                  type: "COLLAB_EVENT",
+                  payload: {
+                    event: "announce",
+                    runId: input.runId,
+                    flowName: input.flowName,
+                    actor: proposalAgent.id,
+                    provenance: "announce_internal",
+                    data: announce,
+                    ts: announceAt
+                  }
+                });
+
+                const review = reviewProposal({
+                  runId: input.runId,
+                  taskId: nextTask.id,
+                  announce,
+                  orchestratorResponse: "REVISE: manual review required"
+                });
+                const reviewedAt = Date.now();
+                await appendRunEvent({
+                  workspaceRoot,
+                  flowName: input.flowName,
+                  event: {
+                    ts: reviewedAt,
+                    flow: input.flowName,
+                    runId: input.runId,
+                    type: "proposal_reviewed",
+                    provenance: "system",
+                    actor: orchestratorId,
+                    payload: review
+                  }
+                });
+                await appendCollabEvent({
+                  workspaceRoot,
+                  flowName: input.flowName,
+                  runId: input.runId,
+                  event: "proposal_reviewed",
+                  actor: orchestratorId,
+                  provenance: "system",
+                  payload: review
+                });
+                this.postMessage({
+                  type: "COLLAB_EVENT",
+                  payload: {
+                    event: "proposal_reviewed",
+                    runId: input.runId,
+                    flowName: input.flowName,
+                    actor: orchestratorId,
+                    provenance: "system",
+                    data: review,
+                    ts: reviewedAt
+                  }
+                });
+
+                if (review.decision === "apply") {
+                  const announceUserAt = Date.now();
+                  const userPayload = {
+                    ...announce,
+                    review
+                  };
+                  await appendRunEvent({
+                    workspaceRoot,
+                    flowName: input.flowName,
+                    event: {
+                      ts: announceUserAt,
+                      flow: input.flowName,
+                      runId: input.runId,
+                      type: "announce",
+                      provenance: "announce_user",
+                      actor: orchestratorId,
+                      payload: userPayload
+                    }
+                  });
+                  await appendCollabEvent({
+                    workspaceRoot,
+                    flowName: input.flowName,
+                    runId: input.runId,
+                    event: "announce",
+                    actor: orchestratorId,
+                    provenance: "announce_user",
+                    payload: userPayload
+                  });
+                  this.postMessage({
+                    type: "COLLAB_EVENT",
+                    payload: {
+                      event: "announce",
+                      runId: input.runId,
+                      flowName: input.flowName,
+                      actor: orchestratorId,
+                      provenance: "announce_user",
+                      data: userPayload,
+                      ts: announceUserAt
+                    }
+                  });
+                }
+              }
             } catch (error) {
               await appendRunEvent({
                 workspaceRoot,
@@ -2113,6 +3122,18 @@ class AgentCanvasPanel {
       }
 
       const status = stopped ? "stopped" : failedMessage ? "failed" : "success";
+      for (const edge of interactionEdges) {
+        await this.logInteractionEvent({
+          flowName: input.flowName,
+          interactionId: String((edge.data as Record<string, unknown> | undefined)?.patternId ?? edge.id),
+          edgeId: edge.id,
+          event: "terminated",
+          data: {
+            runId: input.runId,
+            status
+          }
+        });
+      }
       await finishRun({
         workspaceRoot,
         flowName: input.flowName,
@@ -2211,36 +3232,144 @@ class AgentCanvasPanel {
     return tasks;
   }
 
+  private buildCommunicationPolicy(
+    nodeId: string | undefined,
+    nodes: DiscoverySnapshot["nodes"],
+    edges: DiscoverySnapshot["edges"]
+  ): {
+    allowedTargetIds: string[];
+    allowedTargets: string[];
+    allowedSourceIds: string[];
+  } {
+    if (!nodeId) {
+      return {
+        allowedTargetIds: [],
+        allowedTargets: [],
+        allowedSourceIds: []
+      };
+    }
+
+    const communicationEdgeTypes = new Set<StudioEdge["type"]>([
+      "interaction",
+      "delegates",
+      "agentLink"
+    ]);
+    const nodeById = new Map(nodes.map((node) => [node.id, node] as const));
+    const allowedTargetIds = [...new Set(
+      edges
+        .filter((edge) => edge.source === nodeId && communicationEdgeTypes.has(edge.type))
+        .map((edge) => edge.target)
+    )];
+    const allowedSourceIds = [...new Set(
+      edges
+        .filter((edge) => edge.target === nodeId && communicationEdgeTypes.has(edge.type))
+        .map((edge) => edge.source)
+    )];
+
+    const allowedTargets = allowedTargetIds.map((targetId) => {
+      const targetNode = nodeById.get(targetId);
+      const targetData = (targetNode?.data ?? {}) as Record<string, unknown>;
+      const name = String(
+        targetData.name ??
+        targetData.title ??
+        targetData.role ??
+        targetId
+      );
+      return `${name} (${targetId})`;
+    });
+
+    return {
+      allowedTargetIds,
+      allowedTargets,
+      allowedSourceIds
+    };
+  }
+
   private buildTaskPrompt(
     task: Task,
     node: DiscoverySnapshot["nodes"][number] | undefined,
     outputs: Map<string, unknown>,
-    flowName: string
+    flowName: string,
+    agent: AgentProfile | undefined,
+    contextPacket?: {
+      systemContext: string;
+      relevantMemories: string;
+      totalTokens: number;
+      sources: Array<{ memoryId: string; title: string; relevanceScore: number }>;
+    },
+    promptOverride?: string,
+    communicationPolicy?: {
+      allowedTargetIds: string[];
+      allowedTargets: string[];
+      allowedSourceIds: string[];
+    }
   ): string {
     const data = (node?.data ?? {}) as Record<string, unknown>;
     const name = String(data.name ?? data.title ?? task.title);
     const role = String(data.role ?? (node?.type === "agent" ? "agent" : "system"));
-    const systemPrompt = String(data.systemPrompt ?? data.description ?? "").trim();
+    const allowedTargets = communicationPolicy?.allowedTargets ?? [];
+    const allowedTargetIds = communicationPolicy?.allowedTargetIds ?? [];
+    const allowedSourceIds = communicationPolicy?.allowedSourceIds ?? [];
+    const communicationGuidance =
+      allowedTargets.length > 0
+        ? `Allowed handoff targets: ${allowedTargets.join(", ")}. Do not hand off to any other agent.`
+        : "Allowed handoff targets: (none). Do not hand off this task to another agent.";
     const dependencyOutputs = task.deps
       .map((depId) => ({
         taskId: depId,
         output: outputs.get(depId)
       }))
       .filter((item) => item.output !== undefined);
+    if (promptOverride?.trim()) {
+      return [
+        "## Manual Prompt Override",
+        promptOverride.trim(),
+        "",
+        "## Communication firewall",
+        communicationGuidance,
+        "",
+        "## Dependency outputs",
+        JSON.stringify(dependencyOutputs, null, 2),
+        "",
+        "Return concise plain text output."
+      ].join("\n");
+    }
+    const assignedSkillIds = new Set(agent?.assignedSkillIds ?? []);
+    const assignedMcpIds = new Set(agent?.assignedMcpServerIds ?? []);
+    const assignedSkills = (this.snapshot?.skills ?? []).filter((skill) => assignedSkillIds.has(skill.id));
+    const assignedMcpServers = (this.snapshot?.mcpServers ?? []).filter((server) => assignedMcpIds.has(server.id));
+    const commonRules = (this.snapshot?.commonRules ?? []).map((rule) => rule.path);
 
-    return [
-      `Flow: ${flowName}`,
-      `Node: ${name}`,
-      `Role: ${role}`,
-      `Task: ${task.title}`,
-      systemPrompt ? `System Prompt:\n${systemPrompt}` : "",
-      dependencyOutputs.length > 0
-        ? `Upstream outputs:\n${JSON.stringify(dependencyOutputs, null, 2)}`
-        : "",
-      "Return concise plain text output."
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const cached = buildCachedPrompt({
+      flowName,
+      taskInstruction: [
+        `Node: ${name}`,
+        `Role: ${role}`,
+        `Task: ${task.title}`,
+        communicationGuidance
+      ].join("\n"),
+      agent: agent
+        ? {
+          ...agent,
+          systemPrompt: String(data.systemPrompt ?? agent.systemPrompt ?? data.description ?? "")
+        }
+        : undefined,
+      assignedSkills,
+      assignedMcpServers,
+      commonRules,
+      projectContext: contextPacket?.systemContext,
+      dependencyOutputs,
+      relevantMemory: contextPacket?.relevantMemories,
+      runtimeState: {
+        nodeId: node?.id,
+        nodeType: node?.type,
+        memorySources: contextPacket?.sources ?? [],
+        memoryTokens: contextPacket?.totalTokens ?? 0,
+        allowedTargetIds,
+        allowedSourceIds
+      }
+    });
+    return cached.prompt;
   }
 
   private resolveNodeTitle(node: DiscoverySnapshot["nodes"][number]): string {
@@ -2297,26 +3426,41 @@ class AgentCanvasPanel {
 
   private async resolveBackendForTask(
     requestedBackendId: CliBackendId | undefined,
-    node: DiscoverySnapshot["nodes"][number] | undefined
+    node: DiscoverySnapshot["nodes"][number] | undefined,
+    runtimeResolution?: {
+      runtimeKind: "workspace-default" | "cli" | "openclaw";
+      backendId?: CliBackendId;
+      gatewayUrl?: string;
+      agentKey?: string;
+    }
   ): Promise<CliBackend> {
     const backends = await this.detectCliBackends();
     const config = vscode.workspace.getConfiguration("agentCanvas");
-    let backendId = requestedBackendId;
+    let backendId = runtimeResolution?.backendId ?? requestedBackendId;
+
+    if (runtimeResolution?.runtimeKind === "openclaw") {
+      const args = ["agent", "--message"];
+      if (runtimeResolution.gatewayUrl?.trim()) {
+        args.push("--gateway-url", runtimeResolution.gatewayUrl.trim());
+      }
+      if (runtimeResolution.agentKey?.trim()) {
+        args.push("--agent-key", runtimeResolution.agentKey.trim());
+      }
+      return {
+        id: "custom",
+        displayName: "OpenClaw CLI",
+        command: "openclaw",
+        args,
+        available: true,
+        stdinPrompt: false
+      };
+    }
 
     if (!backendId || backendId === "auto") {
       if (node?.type === "agent") {
         const agent = this.snapshot?.agents.find((item) => item.id === node.id);
         if (agent?.runtime?.kind === "cli") {
           backendId = agent.runtime.backendId;
-        } else if (agent?.runtime?.kind === "openclaw") {
-          return {
-            id: "custom",
-            displayName: "OpenClaw CLI",
-            command: "openclaw",
-            args: ["agent", "--message"],
-            available: true,
-            stdinPrompt: false
-          };
         }
       }
       if (!backendId || backendId === "auto") {
@@ -2341,6 +3485,19 @@ class AgentCanvasPanel {
   private async setBackendOverrides(overrides: CliBackendOverrides): Promise<void> {
     const config = vscode.workspace.getConfiguration("agentCanvas");
     await config.update("cliBackendOverrides", overrides, vscode.ConfigurationTarget.Workspace);
+  }
+
+  private async resolveFlowNameForRun(runId: string): Promise<string> {
+    const active = this.activeRunFlowById.get(runId);
+    if (active) {
+      return active;
+    }
+    const runs = await listRunHistory({
+      workspaceRoot: this.getWorkspaceRoot(),
+      limit: 500
+    });
+    const found = runs.find((run) => run.runId === runId);
+    return found?.flow ?? "default";
   }
 
   private async ensureSnapshot(): Promise<DiscoverySnapshot> {
@@ -2467,11 +3624,12 @@ class AgentCanvasPanel {
       }
 
       try {
-        await setAgentDelegation({
+        const updatedOrchestrator = await setAgentDelegation({
           workspaceRoot,
           agent: orchestrator,
           workerIds
         });
+        createdBySourceName.set(normalizeLabel(generated.name), updatedOrchestrator);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         this.toast("warning", `Failed to set delegation for "${orchestrator.name}": ${detail}`);
@@ -2506,11 +3664,12 @@ class AgentCanvasPanel {
         const owner = createdBySourceName.get(normalizeLabel(suggested.forAgent));
         if (owner) {
           try {
-            await assignSkillToAgent({
+            const updatedOwner = await assignSkillToAgent({
               workspaceRoot,
               agent: owner,
               skillId: skillPath
             });
+            createdBySourceName.set(normalizeLabel(suggested.forAgent), updatedOwner);
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
             this.toast("warning", `Failed to assign skill ${skillName} to ${owner.name}: ${detail}`);
@@ -2539,7 +3698,7 @@ class AgentCanvasPanel {
     }
 
     for (const generated of structure.agents) {
-      const targetAgent = createdBySourceName.get(normalizeLabel(generated.name));
+      let targetAgent = createdBySourceName.get(normalizeLabel(generated.name));
       if (!targetAgent) {
         continue;
       }
@@ -2550,11 +3709,12 @@ class AgentCanvasPanel {
           continue;
         }
         try {
-          await assignSkillToAgent({
+          targetAgent = await assignSkillToAgent({
             workspaceRoot,
             agent: targetAgent,
             skillId: resolvedSkillId
           });
+          createdBySourceName.set(normalizeLabel(generated.name), targetAgent);
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           this.toast("warning", `Failed to assign skill "${requestedSkill}" to ${targetAgent.name}: ${detail}`);
@@ -2567,15 +3727,43 @@ class AgentCanvasPanel {
           continue;
         }
         try {
-          await assignMcpToAgent({
+          targetAgent = await assignMcpToAgent({
             workspaceRoot,
             agent: targetAgent,
             mcpServerId: resolvedMcpId
           });
+          createdBySourceName.set(normalizeLabel(generated.name), targetAgent);
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           this.toast("warning", `Failed to assign MCP "${requestedMcp}" to ${targetAgent.name}: ${detail}`);
         }
+      }
+    }
+
+    // Phase 5: Reconcile delegation relationships to prevent stale cache overwrites.
+    this.postGenerationProgress("building_prompt", "Reconciling delegation edges...", 90);
+    for (const generated of structure.agents) {
+      if (!generated.isOrchestrator) {
+        continue;
+      }
+      const orchestrator = createdBySourceName.get(normalizeLabel(generated.name));
+      if (!orchestrator) {
+        continue;
+      }
+      const workerIds = generated.delegatesTo
+        .map((workerName) => createdBySourceName.get(normalizeLabel(workerName))?.id)
+        .filter((workerId): workerId is string => Boolean(workerId))
+        .filter((workerId) => workerId !== orchestrator.id);
+      try {
+        const reconciled = await setAgentDelegation({
+          workspaceRoot,
+          agent: orchestrator,
+          workerIds
+        });
+        createdBySourceName.set(normalizeLabel(generated.name), reconciled);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.toast("warning", `Failed to reconcile delegation for "${orchestrator.name}": ${detail}`);
       }
     }
 
@@ -2701,4 +3889,95 @@ function isTerminalTaskStatus(status: Task["status"]): boolean {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseHandoffBlock(
+  text: string,
+  orchestratorId: string,
+  nodes: DiscoverySnapshot["nodes"],
+  edges: DiscoverySnapshot["edges"]
+): { targetAgentId: string; targetAgentName: string; handoff: HandoffEnvelope } | undefined {
+  const match = text.match(/HANDOFF\s*([\s\S]*)/);
+  if (!match) {
+    return undefined;
+  }
+
+  const block = match[1] || "";
+
+  const extractField = (label: string): string => {
+    const regex = new RegExp(`^${label}:\\s*(.*(?:\\n(?!\\w+:).*)*)`, "mi");
+    const found = block.match(regex);
+    return found ? found[1].trim() : "";
+  };
+
+  const targetLabel = extractField("Target");
+  const context = extractField("Context");
+  const goal = extractField("Goal");
+  const dod = extractField("DoD");
+  const filesStr = extractField("Files");
+  const nextSteps = extractField("Next");
+
+  if (!targetLabel && !goal && !context) {
+    return undefined;
+  }
+
+  // Find the exact node ID from the name/label provided
+  const targetNameStr = targetLabel.toLowerCase();
+
+  // First, check if the orchestrator is allowed to delegate to this agent
+  const validTargets = edges
+    .filter((edge) => edge.source === orchestratorId && (edge.type === "interaction" || edge.type === "delegates" || edge.type === "agentLink"))
+    .map((edge) => edge.target);
+
+  let targetAgentId = validTargets.find(id => id.toLowerCase() === targetNameStr || id.toLowerCase().includes(targetNameStr));
+
+  if (!targetAgentId) {
+    // If not found in exact IDs, check node names
+    const nodeById = new Map(nodes.map(n => [n.id, n]));
+    for (const validId of validTargets) {
+      const node = nodeById.get(validId);
+      if (!node) continue;
+
+      const data = (node.data ?? {}) as Record<string, unknown>;
+      const name = String(data.name ?? data.title ?? data.role ?? validId).toLowerCase();
+      if (name === targetNameStr || name.includes(targetNameStr)) {
+        targetAgentId = validId;
+        break;
+      }
+    }
+  }
+
+  if (!targetAgentId) {
+    // Last resort: if there is only one valid target, just pick it
+    if (validTargets.length === 1) {
+      targetAgentId = validTargets[0];
+    } else {
+      // Missing or ambiguous target
+      return undefined;
+    }
+  }
+
+  const targetNode = nodes.find(n => n.id === targetAgentId);
+  const targetData = (targetNode?.data ?? {}) as Record<string, unknown>;
+  const targetAgentName = String(targetData.name ?? targetData.title ?? targetData.role ?? targetAgentId);
+
+  const files = filesStr
+    ? filesStr.split(",").map(f => f.trim()).filter(Boolean)
+    : [];
+
+  const handoff: HandoffEnvelope = {
+    intent: goal || "Assigned task",
+    inputs: context ? [context] : [],
+    constraints: dod ? [dod] : [],
+    plan: nextSteps ? [nextSteps] : [],
+    sandboxWorkDir: "", // This will be assigned automatically later
+    proposalJson: "",
+    changedFiles: files
+  };
+
+  return {
+    targetAgentId,
+    targetAgentName,
+    handoff
+  };
 }

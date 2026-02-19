@@ -1,11 +1,16 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { Edge, Node } from "reactflow";
 import type {
   CliBackend,
   CliBackendOverrides,
   DiscoverySnapshot,
+  MemoryCommit,
+  MemoryItem,
+  MemoryNamespace,
+  MemoryQueryResult,
   RunEvent,
   RunSummary,
+  SessionContext,
   Task,
   PromptHistoryEntry,
   Skill
@@ -14,17 +19,19 @@ import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { PatternIndexItem } from "../patterns/types";
 import PromptPanel from "./PromptPanel";
 import RunPanel from "./RunPanel";
+import InspectorVariables from "./InspectorVariables";
+import MemoryPanel from "./MemoryPanel";
 import { getValidationCounts } from "../utils/validation";
 
 type RightPanelProps = {
-  mode: "library" | "inspector" | "prompt" | "run";
+  mode: "library" | "inspector" | "prompt" | "run" | "memory";
   open: boolean;
   saveSignal: number;
   snapshot?: DiscoverySnapshot;
   selectedNode?: Node;
   selectedScheduleTaskId?: string;
   selectedEdge?: Edge;
-  onModeChange: (mode: "library" | "inspector" | "prompt" | "run") => void;
+  onModeChange: (mode: "library" | "inspector" | "prompt" | "run" | "memory") => void;
   onOpenFile: (path: string) => void;
   onRevealPath: (path: string) => void;
   onCreateSkill: (name: string, description: string) => void;
@@ -59,6 +66,8 @@ type RightPanelProps = {
   onUpdateInteractionEdge: (edgeId: string, update: { label?: string; data?: Record<string, unknown> }) => void;
   activeFlowName: string;
   runBackends: CliBackend[];
+  backendOverrides: CliBackendOverrides;
+  defaultBackendId: CliBackend["id"];
   runHistory: RunSummary[];
   runEvents: RunEvent[];
   activeRunId?: string;
@@ -68,19 +77,40 @@ type RightPanelProps = {
     flowName: string;
     backendId: CliBackend["id"];
     usePinnedOutputs: boolean;
+    session?: SessionContext;
   }) => Promise<void>;
   onRunNode: (payload: {
     flowName: string;
     nodeId: string;
     backendId: CliBackend["id"];
     usePinnedOutput: boolean;
+    session?: SessionContext;
   }) => Promise<void>;
+  onReplayRun: (payload: { runId: string; modifiedPrompts?: Record<string, string> }) => Promise<void>;
   onStopRun: (runId: string) => Promise<void>;
   onRefreshRunHistory: () => Promise<void>;
   onSelectRun: (runId: string) => Promise<void>;
   onPinOutput: (flowName: string, nodeId: string, output: unknown) => Promise<void>;
   onUnpinOutput: (flowName: string, nodeId: string) => Promise<void>;
   onSetBackendOverrides: (overrides: CliBackendOverrides) => Promise<void>;
+  onSetDefaultBackend: (backendId: CliBackend["id"]) => Promise<void>;
+  onTestBackend: (backendId: CliBackend["id"]) => Promise<{
+    backendId: CliBackend["id"];
+    ok: boolean;
+    durationMs: number;
+    model?: string;
+    message: string;
+    outputPreview?: string;
+  }>;
+  onOpenRunLog: (runId: string, flowName: string) => void;
+  memoryItems: MemoryItem[];
+  memoryCommits: MemoryCommit[];
+  memoryQueryResult?: MemoryQueryResult;
+  onRefreshMemory: () => Promise<void>;
+  onSearchMemory: (query: string, namespaces?: MemoryNamespace[]) => Promise<void>;
+  onAddMemoryItem: (item: Omit<MemoryItem, "id" | "createdAt" | "updatedAt">) => Promise<void>;
+  onSupersedeMemory: (oldItemId: string, newContent: string, reason: string) => Promise<void>;
+  onCheckoutMemory: (commitId: string) => Promise<void>;
 };
 
 export default function RightPanel(props: RightPanelProps) {
@@ -88,6 +118,16 @@ export default function RightPanel(props: RightPanelProps) {
   const debouncedQuery = useDebouncedValue(query, 120);
   const [skillName, setSkillName] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
+  const [inspectorTab, setInspectorTab] = useState<"overview" | "variables">("overview");
+  const [agentInspectorTab, setAgentInspectorTab] = useState<"overview" | "skills" | "rules" | "mcp">("overview");
+  const [skillRenderLimit, setSkillRenderLimit] = useState(160);
+
+  useEffect(() => {
+    if (props.mode !== "inspector") {
+      return;
+    }
+    setInspectorTab("overview");
+  }, [props.mode]);
 
   const skills = props.snapshot?.skills ?? [];
   const rules = props.snapshot?.ruleDocs ?? [];
@@ -105,16 +145,47 @@ export default function RightPanel(props: RightPanelProps) {
     );
   }, [debouncedQuery, skills]);
 
+  useEffect(() => {
+    setSkillRenderLimit(160);
+  }, [debouncedQuery]);
+
+  const visibleSkills = useMemo(
+    () => filteredSkills.slice(0, skillRenderLimit),
+    [filteredSkills, skillRenderLimit]
+  );
+
   const selectedType = props.selectedNode?.type;
   const selectedEdgeType = props.selectedEdge?.type;
   const selectedAgentId =
     selectedType === "agent"
       ? String((props.selectedNode?.data as Record<string, unknown>)?.id ?? props.selectedNode?.id ?? "")
       : "";
+  const selectedAgentProfile = useMemo(
+    () => props.snapshot?.agents.find((agent) => agent.id === selectedAgentId),
+    [props.snapshot?.agents, selectedAgentId]
+  );
+  const agentSkills = useMemo(() => {
+    if (!selectedAgentId) {
+      return [];
+    }
+    const assigned = new Set(selectedAgentProfile?.assignedSkillIds ?? []);
+    return (props.snapshot?.skills ?? []).filter(
+      (skill) => skill.ownerAgentId === selectedAgentId || assigned.has(skill.id)
+    );
+  }, [props.snapshot?.skills, selectedAgentId, selectedAgentProfile?.assignedSkillIds]);
+  const agentRules = useMemo(
+    () => (props.snapshot?.ruleDocs ?? []).filter((rule) => rule.ownerAgentId === selectedAgentId),
+    [props.snapshot?.ruleDocs, selectedAgentId]
+  );
   const agentMcpServers = useMemo(
     () => (props.snapshot?.mcpServers ?? []).filter((server) => server.ownerAgentId === selectedAgentId),
     [props.snapshot?.mcpServers, selectedAgentId]
   );
+  useEffect(() => {
+    if (selectedType === "agent") {
+      setAgentInspectorTab("overview");
+    }
+  }, [selectedType, selectedAgentId]);
 
   if (!props.open) {
     return null;
@@ -169,6 +240,15 @@ export default function RightPanel(props: RightPanelProps) {
         >
           Run
         </button>
+        <button
+          role="tab"
+          aria-selected={props.mode === "memory"}
+          aria-controls="right-panel-memory"
+          className={props.mode === "memory" ? "active" : ""}
+          onClick={() => props.onModeChange("memory")}
+        >
+          Memory
+        </button>
       </div>
 
       {props.mode === "library" && (
@@ -184,7 +264,7 @@ export default function RightPanel(props: RightPanelProps) {
 
           <div className="library-block">
             <div className="library-title">Skills</div>
-            {filteredSkills.map((skill) => (
+            {visibleSkills.map((skill) => (
               <LibrarySkillItem
                 key={skill.id}
                 skill={skill}
@@ -195,6 +275,11 @@ export default function RightPanel(props: RightPanelProps) {
               />
             ))}
             {filteredSkills.length === 0 && <div className="muted">No matching skills</div>}
+            {filteredSkills.length > visibleSkills.length && (
+              <button type="button" onClick={() => setSkillRenderLimit((current) => current + 160)}>
+                Load more ({filteredSkills.length - visibleSkills.length} remaining)
+              </button>
+            )}
           </div>
 
           <div className="library-block">
@@ -298,7 +383,33 @@ export default function RightPanel(props: RightPanelProps) {
 
       {props.mode === "inspector" && (
         <div className="panel-content" id="right-panel-inspector" role="tabpanel">
-          {!props.selectedNode && !props.selectedEdge && <div className="muted">Select a node or edge to inspect</div>}
+          <div className="view-toggle inspector-subtabs" role="tablist" aria-label="Inspector tabs">
+            <button
+              type="button"
+              className={inspectorTab === "overview" ? "active-toggle" : ""}
+              onClick={() => setInspectorTab("overview")}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              className={inspectorTab === "variables" ? "active-toggle" : ""}
+              onClick={() => setInspectorTab("variables")}
+            >
+              Variables
+            </button>
+          </div>
+
+          {inspectorTab === "variables" ? (
+            <InspectorVariables
+              flowName={props.activeFlowName}
+              nodeId={props.selectedNode?.id}
+              runEvents={props.runEvents}
+              onPinOutput={props.onPinOutput}
+            />
+          ) : (
+            <>
+              {!props.selectedNode && !props.selectedEdge && <div className="muted">Select a node or edge to inspect</div>}
 
           {selectedType === "skill" && (
             <SkillInspector
@@ -339,24 +450,93 @@ export default function RightPanel(props: RightPanelProps) {
               <div className="inspector-heading">
                 {String((props.selectedNode?.data as Record<string, unknown>)?.name ?? "Agent")}
               </div>
-              <div className="muted">
-                Provider: {String((props.selectedNode?.data as Record<string, unknown>)?.providerId ?? "-")}
+              <div className="view-toggle inspector-subtabs" role="tablist" aria-label="Agent manage tabs">
+                <button
+                  type="button"
+                  className={agentInspectorTab === "overview" ? "active-toggle" : ""}
+                  onClick={() => setAgentInspectorTab("overview")}
+                >
+                  Overview
+                </button>
+                <button
+                  type="button"
+                  className={agentInspectorTab === "skills" ? "active-toggle" : ""}
+                  onClick={() => setAgentInspectorTab("skills")}
+                >
+                  Skills
+                </button>
+                <button
+                  type="button"
+                  className={agentInspectorTab === "rules" ? "active-toggle" : ""}
+                  onClick={() => setAgentInspectorTab("rules")}
+                >
+                  Rules
+                </button>
+                <button
+                  type="button"
+                  className={agentInspectorTab === "mcp" ? "active-toggle" : ""}
+                  onClick={() => setAgentInspectorTab("mcp")}
+                >
+                  MCP
+                </button>
               </div>
-              <div className="muted">Common rules tracked: {props.snapshot?.commonRules.length ?? 0}</div>
-              <div className="inspector-title muted-title">MCP</div>
-              <div className="muted">Servers: {agentMcpServers.length}</div>
-              {agentMcpServers.length > 2 && (
-                <div className="validation-item warning">
-                  WARNING: More than 2 MCP servers can increase context cost.
-                </div>
+
+              {agentInspectorTab === "overview" && (
+                <>
+                  <div className="muted">
+                    Provider: {String((props.selectedNode?.data as Record<string, unknown>)?.providerId ?? "-")}
+                  </div>
+                  <div className="muted">Role: {selectedAgentProfile?.role ?? "custom"}</div>
+                  <div className="muted">Skills: {agentSkills.length}</div>
+                  <div className="muted">Rules: {agentRules.length}</div>
+                  <div className="muted">MCP Servers: {agentMcpServers.length}</div>
+                  <div className="muted">Common rules tracked: {props.snapshot?.commonRules.length ?? 0}</div>
+                </>
               )}
-              {agentMcpServers.map((server) => (
-                <div key={server.id} className="validation-item">
-                  {server.name} · {server.kind} · {server.providerId} · {server.enabled ? "enabled" : "disabled"}
-                </div>
-              ))}
-              {agentMcpServers.length === 0 && (
-                <div className="muted">No MCP servers discovered for this agent.</div>
+
+              {agentInspectorTab === "skills" && (
+                <>
+                  {agentSkills.length === 0 && (
+                    <div className="muted">No skills assigned to this agent.</div>
+                  )}
+                  {agentSkills.map((skill) => (
+                    <div key={skill.id} className="validation-item">
+                      {skill.name} · {skill.enabled ? "enabled" : "disabled"}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {agentInspectorTab === "rules" && (
+                <>
+                  {agentRules.length === 0 && (
+                    <div className="muted">No rule docs linked to this agent.</div>
+                  )}
+                  {agentRules.map((rule) => (
+                    <div key={rule.id} className="validation-item">
+                      {rule.path}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {agentInspectorTab === "mcp" && (
+                <>
+                  <div className="muted">Servers: {agentMcpServers.length}</div>
+                  {agentMcpServers.length > 2 && (
+                    <div className="validation-item warning">
+                      WARNING: More than 2 MCP servers can increase context cost.
+                    </div>
+                  )}
+                  {agentMcpServers.map((server) => (
+                    <div key={server.id} className="validation-item">
+                      {server.name} · {server.kind} · {server.providerId} · {server.enabled ? "enabled" : "disabled"}
+                    </div>
+                  ))}
+                  {agentMcpServers.length === 0 && (
+                    <div className="muted">No MCP servers discovered for this agent.</div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -383,8 +563,10 @@ export default function RightPanel(props: RightPanelProps) {
             </div>
           )}
 
-          {selectedEdgeType === "interaction" && props.selectedEdge && (
-            <InteractionEdgeInspector edge={props.selectedEdge} onSave={props.onUpdateInteractionEdge} />
+              {selectedEdgeType === "interaction" && props.selectedEdge && (
+                <InteractionEdgeInspector edge={props.selectedEdge} onSave={props.onUpdateInteractionEdge} />
+              )}
+            </>
           )}
         </div>
       )}
@@ -406,6 +588,8 @@ export default function RightPanel(props: RightPanelProps) {
           activeFlowName={props.activeFlowName}
           selectedNodeId={props.selectedScheduleTaskId ?? props.selectedNode?.id}
           backends={props.runBackends}
+          backendOverrides={props.backendOverrides}
+          defaultBackendId={props.defaultBackendId}
           runs={props.runHistory}
           runEvents={props.runEvents}
           activeRunId={props.activeRunId}
@@ -413,12 +597,29 @@ export default function RightPanel(props: RightPanelProps) {
           selectedTask={props.selectedScheduleTask}
           onRunFlow={props.onRunFlow}
           onRunNode={props.onRunNode}
+          onReplayRun={props.onReplayRun}
           onStopRun={props.onStopRun}
           onRefreshRuns={props.onRefreshRunHistory}
           onSelectRun={props.onSelectRun}
           onPinOutput={props.onPinOutput}
           onUnpinOutput={props.onUnpinOutput}
           onSetBackendOverrides={props.onSetBackendOverrides}
+          onSetDefaultBackend={props.onSetDefaultBackend}
+          onTestBackend={props.onTestBackend}
+          onOpenRunLog={props.onOpenRunLog}
+        />
+      )}
+
+      {props.mode === "memory" && (
+        <MemoryPanel
+          items={props.memoryItems}
+          commits={props.memoryCommits}
+          queryResult={props.memoryQueryResult}
+          onRefresh={props.onRefreshMemory}
+          onSearch={props.onSearchMemory}
+          onAdd={props.onAddMemoryItem}
+          onSupersede={props.onSupersedeMemory}
+          onCheckout={props.onCheckoutMemory}
         />
       )}
     </aside>
@@ -487,7 +688,12 @@ function InteractionEdgeInspector(props: {
 
   const save = () => {
     try {
-      const parsed = JSON.parse(dataText) as Record<string, unknown>;
+      const parsedRaw = JSON.parse(dataText) as unknown;
+      if (!isRecord(parsedRaw)) {
+        setError("interaction data must be a JSON object");
+        return;
+      }
+      const parsed = parsedRaw as Record<string, unknown>;
       const termination = parsed.termination as Record<string, unknown> | undefined;
       if (!termination || typeof termination.type !== "string") {
         setError("termination is required for interaction edges");
@@ -563,7 +769,7 @@ function SkillInspector(props: {
     setJsonError(undefined);
   }, [skillId]);
 
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     try {
       const parsed = JSON.parse(extraFrontmatterText) as Record<string, unknown>;
       setJsonError(undefined);
@@ -571,15 +777,14 @@ function SkillInspector(props: {
     } catch {
       setJsonError("extra frontmatter must be valid JSON");
     }
-  };
+  }, [description, extraFrontmatterText, name, props.onSave, skillId]);
 
   useEffect(() => {
     if (!skillId || props.saveSignal === 0) {
       return;
     }
     handleSave();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.saveSignal]);
+  }, [handleSave, props.saveSignal, skillId]);
 
   return (
     <div className="inspector-block">
@@ -646,4 +851,8 @@ function RuleInspector(props: {
       </div>
     </div>
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

@@ -1,0 +1,29 @@
+<svg viewBox="0 0 320 200" width="320" height="200" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .bot { animation: drop 3s infinite ease-out; }
+    .bot2 { animation-delay: 0.2s; }
+    .bot3 { animation-delay: 0.4s; }
+    .conn { stroke: #2fa184; stroke-width: 2; stroke-dasharray: 100; stroke-dashoffset: 100; animation: draw 3s infinite ease-in-out 1s; opacity: 0.4;}
+    .glow { fill: #3dd9a8; opacity: 0; filter: blur(20px); animation: pulseBot 3s infinite 2s; }
+    @keyframes drop { 0% { transform: translateY(-40px); opacity: 0; } 15%, 85% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(-10px); opacity: 0; } }
+    @keyframes draw { 0% { stroke-dashoffset: 100; } 15%, 85% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 0; opacity: 0; } }
+    @keyframes pulseBot { 0%, 100% { opacity: 0; } 20%, 80% { opacity: 0.15; } }
+  </style>
+  <ellipse cx="160" cy="100" rx="120" ry="60" class="glow"/>
+  <line x1="160" y1="70" x2="100" y2="130" class="conn"/>
+  <line x1="160" y1="70" x2="220" y2="130" class="conn"/>
+  <line x1="100" y1="130" x2="220" y2="130" class="conn"/>
+  <g transform="translate(160, 70)" class="bot">
+    <rect x="-24" y="-20" width="48" height="40" rx="10" fill="#181b20" stroke="#e8a64a" stroke-width="3"/>
+    <circle cx="-10" cy="0" r="5" fill="#e8a64a"/><circle cx="10" cy="0" r="5" fill="#e8a64a"/>
+    <polygon points="-8,-20 0,-30 8,-20" fill="#e8a64a"/>
+  </g>
+  <g transform="translate(100, 130)" class="bot bot2">
+    <rect x="-20" y="-16" width="40" height="32" rx="8" fill="#181b20" stroke="#4a87e8" stroke-width="3"/>
+    <circle cx="-8" cy="0" r="4" fill="#4a87e8"/><circle cx="8" cy="0" r="4" fill="#4a87e8"/>
+  </g>
+  <g transform="translate(220, 130)" class="bot bot3">
+    <rect x="-20" y="-16" width="40" height="32" rx="8" fill="#181b20" stroke="#a86ee5" stroke-width="3"/>
+    <circle cx="-8" cy="0" r="4" fill="#a86ee5"/><circle cx="8" cy="0" r="4" fill="#a86ee5"/>
+  </g>
+</svg>

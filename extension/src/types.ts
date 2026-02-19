@@ -9,19 +9,98 @@ export type AgentRole =
   | "writer"
   | "custom";
 
-export type CliBackendId = "auto" | "claude-code" | "gemini-cli" | "codex-cli" | "aider" | "custom";
+export type CliBackendId =
+  | "auto"
+  | "claude"
+  | "gemini"
+  | "codex"
+  | "claude-code"
+  | "gemini-cli"
+  | "codex-cli"
+  | "aider"
+  | "custom";
 
 export type AgentRuntime =
   | {
       kind: "cli";
       backendId: CliBackendId;
       cwdMode?: "workspace" | "agentHome";
+      modelId?: string;
     }
   | {
       kind: "openclaw";
       gatewayUrl?: string;
       agentKey?: string;
     };
+
+export type InteractionTopology =
+  | "p2p"
+  | "manager_worker"
+  | "pipeline"
+  | "blackboard"
+  | "market_auction"
+  | "debate_judge"
+  | "broker"
+  | "router_targeted"
+  | "broadcast";
+
+export type MessageForm = "nl_text" | "structured_json" | "acl_performative" | "multimodal";
+
+export type SyncMode = "turn_based" | "req_res" | "async" | "streaming";
+
+export type Termination =
+  | { type: "max_rounds"; rounds: number }
+  | { type: "timeout_ms"; ms: number }
+  | { type: "judge_decision" }
+  | { type: "consensus_threshold"; threshold: number }
+  | { type: "quality_gate"; metric: string; op: ">=" | "<="; value: number };
+
+export interface InteractionEdgeData {
+  patternId: string;
+  topology: InteractionTopology;
+  messageForm: MessageForm;
+  sync: SyncMode;
+  termination: Termination;
+  params: Record<string, unknown>;
+  observability: {
+    logs: boolean;
+    traces: boolean;
+    retain_days?: number;
+  };
+}
+
+export type SystemNodeKind =
+  | "judge"
+  | "blackboard"
+  | "router"
+  | "broker"
+  | "coordinator"
+  | "gateway"
+  | "custom";
+
+export interface SystemNodeData {
+  id: string;
+  name: string;
+  role: string;
+  description?: string;
+  kind?: SystemNodeKind;
+  status?: "active" | "idle" | "paused";
+}
+
+export interface HandoffEnvelope {
+  intent: string;
+  inputs?: string[];
+  plan?: string[];
+  constraints?: string[];
+  deliverables?: string[];
+  sandboxWorkDir: string;
+  proposalJson: string;
+  changedFiles: string[];
+  // Backward compatibility for legacy payload keys.
+  SandboxWorkDir?: string;
+  ProposalJson?: string;
+  ChangedFiles?: string[];
+}
 
 export interface ValidationIssue {
   level: "error" | "warning";
@@ -45,6 +124,7 @@ export interface AgentProfile {
   assignedSkillIds?: string[];
   assignedMcpServerIds?: string[];
   runtime?: AgentRuntime;
+  preferredModel?: string;
   color?: string;
   avatar?: string;
 }
@@ -197,6 +277,145 @@ export interface SkillPackPreview {
   warnings: string[];
 }
 
+export interface CacheConfig {
+  retention: "short" | "long";
+  contextPruning: {
+    mode: "cache-ttl";
+    ttlSeconds: number;
+  };
+  diagnostics: {
+    enabled: boolean;
+    logPath: string;
+  };
+  modelRouting: {
+    heartbeat: string;
+    cron: string;
+    default: string;
+  };
+  contextThreshold: number;
+}
+
+export interface CacheMetrics {
+  cacheRead: number;
+  cacheWrite: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number;
+  savedCost: number;
+  model: string;
+  hitRate: number;
+}
+
+export interface UsageMetrics {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  model?: string;
+  cost?: number;
+  savedCost?: number;
+}
+
+export type EventProvenance =
+  | "user_input"
+  | "orchestrator_to_worker"
+  | "worker_proposal"
+  | "announce_internal"
+  | "announce_user"
+  | "system";
+
+export interface AnnounceMessage {
+  runId: string;
+  workerId: string;
+  workerName: string;
+  status: "ok" | "error" | "timeout";
+  summary: string;
+  proposalPath?: string;
+  touchedFiles: string[];
+  testsRun?: { passed: number; failed: number };
+  durationMs: number;
+}
+
+export type ReviewDecision = "apply" | "reject" | "revise";
+
+export interface ProposalReview {
+  runId: string;
+  taskId: string;
+  decision: ReviewDecision;
+  reason?: string;
+  appliedAt?: number;
+}
+
+export type MemoryItemType =
+  | "fact"
+  | "decision"
+  | "learning"
+  | "summary"
+  | "preference"
+  | "artifact";
+
+export type MemoryNamespace =
+  | "system"
+  | "shared"
+  | `agent/${string}`
+  | `flow/${string}`;
+
+export interface MemoryItem {
+  id: string;
+  namespace: MemoryNamespace;
+  type: MemoryItemType;
+  title: string;
+  content: string;
+  source: {
+    agentId?: string;
+    runId?: string;
+    taskId?: string;
+    flowName?: string;
+  };
+  tags: string[];
+  importance: number;
+  createdAt: number;
+  updatedAt: number;
+  ttlMs?: number;
+  supersededBy?: string;
+}
+
+export interface MemoryQueryResult {
+  items: MemoryItem[];
+  totalCount: number;
+  budgetUsed: number;
+  budgetLimit: number;
+}
+
+export interface ContextPacket {
+  systemContext: string;
+  relevantMemories: string;
+  totalTokens: number;
+  sources: Array<{
+    memoryId: string;
+    title: string;
+    relevanceScore: number;
+  }>;
+}
+
+export interface MemoryCommit {
+  commitId: string;
+  parentId?: string;
+  author: string;
+  message: string;
+  itemsAdded: string[];
+  itemsUpdated: string[];
+  itemsSuperseded: string[];
+  timestamp: number;
+}
+
+export type SessionScope = "workspace" | "user" | "channel";
+
+export interface SessionContext {
+  scope: SessionScope;
+  scopeId?: string;
+}
+
 export type TaskStatus =
   | "planned"
   | "ready"
@@ -267,13 +486,23 @@ export interface RunEvent {
     | "node_output"
     | "node_failed"
     | "edge_fired"
+    | "task_dispatched"
+    | "proposal_submitted"
+    | "proposal_reviewed"
+    | "proposal_applied"
+    | "proposal_rejected"
+    | "announce"
+    | "memory_injected"
     | "run_log";
   nodeId?: string;
   edgeId?: string;
   input?: unknown;
   output?: unknown;
   payload?: unknown;
-  usage?: Record<string, number>;
+  usage?: UsageMetrics;
+  provenance?: EventProvenance;
+  parentRunId?: string;
+  actor?: string;
   status?: RunStatus;
   message?: string;
   meta?: Record<string, unknown>;
@@ -284,4 +513,5 @@ export interface PinnedOutput {
   nodeId: string;
   output: unknown;
   pinnedAt: number;
+  expiresAt?: number;
 }

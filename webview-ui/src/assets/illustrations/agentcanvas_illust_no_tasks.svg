@@ -1,0 +1,13 @@
+<svg viewBox="0 0 600 400" width="600" height="400" xmlns="http://www.w3.org/2000/svg">
+  <!-- 컬럼 3개 -->
+  <rect x="60" y="60" width="140" height="300" rx="12" fill="none" stroke="#d7dce5" stroke-opacity="0.12" stroke-width="2" stroke-dasharray="6 6"/>
+  <rect x="230" y="60" width="140" height="300" rx="12" fill="none" stroke="#d7dce5" stroke-opacity="0.12" stroke-width="2" stroke-dasharray="6 6"/>
+  <rect x="400" y="60" width="140" height="300" rx="12" fill="none" stroke="#d7dce5" stroke-opacity="0.12" stroke-width="2" stroke-dasharray="6 6"/>
+  <!-- 컬럼 헤더 -->
+  <rect x="80" y="80" width="100" height="12" rx="6" fill="#d7dce5" opacity="0.2"/>
+  <rect x="250" y="80" width="100" height="12" rx="6" fill="#d7dce5" opacity="0.2"/>
+  <rect x="420" y="80" width="100" height="12" rx="6" fill="#d7dce5" opacity="0.2"/>
+  <!-- 떨어지는 고스트 카드 (To Do) -->
+  <rect x="70" y="40" width="120" height="60" rx="8" fill="#2fa184" fill-opacity="0.2"/>
+  <path d="M 130 110 L 130 130 M 125 125 L 130 130 L 135 125" stroke="#2fa184" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.5"/>
+</svg>

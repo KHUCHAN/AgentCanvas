@@ -3,6 +3,7 @@ import { Component } from "react";
 
 type ErrorBoundaryProps = {
   children: ReactNode;
+  section?: string;
 };
 
 type ErrorBoundaryState = {
@@ -32,6 +33,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
       return (
         <div style={{ padding: 16 }}>
           <h2>AgentCanvas UI Error</h2>
+          {this.props.section && <p>Section: {this.props.section}</p>}
           <p>{this.state.message ?? "Unexpected rendering error"}</p>
           <p>Reload the webview and try again.</p>
         </div>

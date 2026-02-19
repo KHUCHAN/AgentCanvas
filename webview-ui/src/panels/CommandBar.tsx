@@ -43,18 +43,19 @@ export default function CommandBar({ open, commands, onClose }: CommandBarProps)
   }, [commands, debouncedQuery]);
 
   useEffect(() => {
-    if (!open || filteredCommands.length === 0) {
-      return;
-    }
-    setSelectedIndex((prev) => Math.min(prev, filteredCommands.length - 1));
-  }, [filteredCommands.length, open]);
-
-  useEffect(() => {
     if (!open) {
       return;
     }
-    setSelectedIndex(0);
-  }, [debouncedQuery, open]);
+    setSelectedIndex((prev) => {
+      if (debouncedQuery.trim().length > 0) {
+        return 0;
+      }
+      if (filteredCommands.length === 0) {
+        return 0;
+      }
+      return Math.min(prev, filteredCommands.length - 1);
+    });
+  }, [debouncedQuery, filteredCommands.length, open]);
 
   const runSelectedCommand = () => {
     const command = filteredCommands[selectedIndex];

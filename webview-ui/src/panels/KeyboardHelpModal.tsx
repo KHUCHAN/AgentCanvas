@@ -7,6 +7,9 @@ type KeyboardHelpModalProps = {
 };
 
 const SHORTCUTS: Array<{ key: string; action: string }> = [
+  { key: "Ctrl/Cmd+S", action: "Save flow and inspector changes" },
+  { key: "Ctrl/Cmd+O", action: "Load flow" },
+  { key: "R", action: "Refresh discovery" },
   { key: "Ctrl/Cmd+K", action: "Open command bar" },
   { key: "Ctrl/Cmd+L", action: "Open node library" },
   { key: "Shift+S", action: "Add sticky note" },

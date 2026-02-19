@@ -70,6 +70,15 @@ export default function AgentNode({ data, selected }: NodeProps<AgentNodeData>) 
       role="button"
       aria-label={`Agent: ${data.name}`}
       style={data.color ? { borderLeftColor: data.color } : undefined}
+      onKeyDown={(event) => {
+        if (event.currentTarget !== event.target) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.currentTarget.click();
+        }
+      }}
       onDragOver={handleDragOver}
       onDragLeave={() => setDropHighlight(false)}
       onDrop={handleDrop}

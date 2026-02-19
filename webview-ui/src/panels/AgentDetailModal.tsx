@@ -1,4 +1,4 @@
-import { KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRole, AgentRuntime, CliBackendId, DiscoverySnapshot } from "../messaging/protocol";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
@@ -89,21 +89,24 @@ export default function AgentDetailModal({
     }
   }, [open]);
 
+  const onWindowKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      onClose();
+    },
+    [onClose]
+  );
+
   useEffect(() => {
     if (!open) {
       return;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-      }
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open]);
+    window.addEventListener("keydown", onWindowKeyDown);
+    return () => window.removeEventListener("keydown", onWindowKeyDown);
+  }, [onWindowKeyDown, open]);
 
   const onTabListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const tabs: AgentDetailTab[] = ["overview", "skills", "rules", "mcp"];

@@ -1,0 +1,19 @@
+<svg viewBox="0 0 800 500" width="800" height="500" xmlns="http://www.w3.org/2000/svg">
+  <!-- 프롬프트 입력창 고스트 -->
+  <rect x="250" y="200" width="300" height="60" rx="30" fill="none" stroke="#2fa184" stroke-width="2" stroke-opacity="0.4" stroke-dasharray="8 8"/>
+  <text x="400" y="235" fill="#2fa184" opacity="0.4" font-family="sans-serif" font-size="16" text-anchor="middle">Start building your team...</text>
+
+  <!-- 아크(Arc) 점선 연결선 -->
+  <path d="M 200 300 Q 400 450 600 300" fill="none" stroke="#2fa184" stroke-width="2" stroke-opacity="0.2" stroke-dasharray="6 6"/>
+
+  <!-- 대기중인 봇 1 (좌측) -->
+  <g transform="translate(160, 260)" stroke="#4a87e8" stroke-width="2" fill="none" opacity="0.5">
+    <rect x="0" y="0" width="60" height="50" rx="12"/><circle cx="20" cy="20" r="4" fill="#4a87e8"/><circle cx="40" cy="20" r="4" fill="#4a87e8"/><path d="M 25 35 Q 30 40 35 35"/>
+    <text x="-10" y="-10" stroke="none" fill="#4a87e8" font-size="12">zzz</text>
+  </g>
+  <!-- 대기중인 봇 2 (우측) -->
+  <g transform="translate(580, 260)" stroke="#2fa184" stroke-width="2" fill="none" opacity="0.5">
+    <rect x="0" y="0" width="60" height="50" rx="12"/><circle cx="20" cy="20" r="4" fill="#2fa184"/><circle cx="40" cy="20" r="4" fill="#2fa184"/><path d="M 25 35 Q 30 40 35 35"/>
+    <path d="M 60 25 Q 75 10 70 30" stroke-linecap="round"/>
+  </g>
+</svg>

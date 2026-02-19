@@ -1,0 +1,18 @@
+<svg viewBox="0 0 400 8" width="400" height="8" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="bar"><rect width="400" height="8" rx="4"/></clipPath>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3dd9a8" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#3dd9a8" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#3dd9a8" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <style>
+    .sweep { animation: moveRight 1.5s infinite linear; }
+    @keyframes moveRight { 0% { transform: translateX(-100px) skewX(-30deg); } 100% { transform: translateX(400px) skewX(-30deg); } }
+  </style>
+  <rect width="400" height="8" fill="#2fa184" rx="4"/>
+  <g clip-path="url(#bar)">
+    <rect x="0" y="0" width="80" height="8" fill="url(#glow)" class="sweep"/>
+  </g>
+</svg>

@@ -24,7 +24,9 @@ export async function discoverExtensionManagedCommonRules(
 }
 
 export async function ensureRootAgentsFile(workspacePath: string): Promise<string> {
-  const rootAgentsPath = resolve(workspacePath, "AGENTS.md");
+  const rootPath = resolve(workspacePath);
+  await mkdir(rootPath, { recursive: true });
+  const rootAgentsPath = resolve(rootPath, "AGENTS.md");
   if (!(await exists(rootAgentsPath))) {
     const initial = `# AGENTS\n\n## Common Rules\nAdd shared guidance here.\n`;
     await writeFile(rootAgentsPath, initial, "utf8");
@@ -151,6 +153,7 @@ AgentCanvas — Communication, Memory, and Ops Rules
 
 ## 6) Handoff format
 HANDOFF
+Target:
 Context:
 Goal:
 DoD:

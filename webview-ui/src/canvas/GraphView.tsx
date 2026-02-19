@@ -64,6 +64,7 @@ type GraphViewProps = {
   onAssignMcpToAgent: (agentId: string, mcpServerId: string) => void;
   onDropPattern: (patternId: string, position: Position) => void;
   onSaveNodePosition: (nodeId: string, position: Position) => void;
+  onAgentExpand: (agentId: string) => void;
 };
 
 const nodeTypes: NodeTypes = {
@@ -123,7 +124,8 @@ function GraphCanvas({
   onAssignSkillToAgent,
   onAssignMcpToAgent,
   onDropPattern,
-  onSaveNodePosition
+  onSaveNodePosition,
+  onAgentExpand
 }: GraphViewProps) {
   const reactFlow = useReactFlow();
   const [panModifierActive, setPanModifierActive] = useState(false);
@@ -213,13 +215,11 @@ function GraphCanvas({
         onRevealPath(data.path);
       }
       if (node.type === "agent") {
-        onOpenAgentDetail(
-          String(data.id ?? node.id),
-          String(data.name ?? "Agent")
-        );
+        onAgentExpand(String(data.id ?? node.id));
+        return;
       }
     },
-    [onOpenFile, onOpenAgentDetail, onRevealPath]
+    [onAgentExpand, onOpenFile, onRevealPath]
   );
 
   const onConnect = useCallback(
