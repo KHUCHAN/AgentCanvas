@@ -4,15 +4,40 @@ export type ValidationIssue = {
   message: string;
 };
 
+export type CliBackendId = "auto" | "claude-code" | "gemini-cli" | "codex-cli" | "aider" | "custom";
+
+export type AgentRuntime =
+  | {
+      kind: "cli";
+      backendId: CliBackendId;
+      cwdMode?: "workspace" | "agentHome";
+    }
+  | {
+      kind: "openclaw";
+      gatewayUrl?: string;
+      agentKey?: string;
+    };
+
 export type CliBackend = {
-  id: "auto" | "claude-code" | "gemini-cli" | "codex-cli" | "aider" | "custom";
+  id: CliBackendId;
   displayName: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
   available: boolean;
   version?: string;
   stdinPrompt?: boolean;
 };
+
+export type CliBackendOverride = {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  displayName?: string;
+  stdinPrompt?: boolean;
+};
+
+export type CliBackendOverrides = Partial<Record<Exclude<CliBackendId, "auto">, CliBackendOverride>>;
 
 export type AgentRole =
   | "orchestrator"
@@ -38,6 +63,7 @@ export type AgentProfile = {
   delegatesTo?: string[];
   assignedSkillIds?: string[];
   assignedMcpServerIds?: string[];
+  runtime?: AgentRuntime;
   color?: string;
   avatar?: string;
 };
@@ -162,6 +188,95 @@ export type SkillPackPreview = {
   warnings: string[];
 };
 
+export type TaskStatus =
+  | "planned"
+  | "ready"
+  | "running"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "canceled";
+
+export type TaskBlocker =
+  | { kind: "approval"; message: string }
+  | { kind: "input"; message: string }
+  | { kind: "external"; message: string }
+  | { kind: "error"; message: string; stack?: string };
+
+export type Task = {
+  id: string;
+  title: string;
+  agentId: string;
+  deps: string[];
+  estimateMs?: number;
+  plannedStartMs?: number;
+  plannedEndMs?: number;
+  actualStartMs?: number;
+  actualEndMs?: number;
+  progress?: number;
+  status: TaskStatus;
+  blocker?: TaskBlocker;
+  overrides?: {
+    pinned?: boolean;
+    forceStartMs?: number;
+    forceAgentId?: string;
+    priority?: number;
+  };
+  meta?: Record<string, unknown>;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+export type TaskEvent =
+  | { type: "snapshot"; runId: string; tasks: Task[]; nowMs: number }
+  | { type: "task_created"; runId: string; task: Task; nowMs: number }
+  | { type: "task_updated"; runId: string; taskId: string; patch: Partial<Task>; nowMs: number }
+  | { type: "task_deleted"; runId: string; taskId: string; nowMs: number }
+  | { type: "schedule_recomputed"; runId: string; affectedTaskIds: string[]; nowMs: number };
+
+export type RunStatus = "running" | "success" | "failed" | "stopped";
+
+export type RunSummary = {
+  runId: string;
+  flow: string;
+  startedAt: number;
+  finishedAt?: number;
+  status: RunStatus;
+  backendId?: CliBackendId;
+  runName?: string;
+  tags?: string[];
+};
+
+export type RunEvent = {
+  ts: number;
+  runId: string;
+  flow: string;
+  type:
+    | "run_started"
+    | "run_finished"
+    | "node_started"
+    | "node_output"
+    | "node_failed"
+    | "edge_fired"
+    | "run_log";
+  nodeId?: string;
+  edgeId?: string;
+  input?: unknown;
+  output?: unknown;
+  payload?: unknown;
+  usage?: Record<string, number>;
+  status?: RunStatus;
+  message?: string;
+  meta?: Record<string, unknown>;
+};
+
+export type PinnedOutput = {
+  flowName: string;
+  nodeId: string;
+  output: unknown;
+  pinnedAt: number;
+};
+
 export type RequestId = string;
 
 export type Position = { x: number; y: number };
@@ -273,6 +388,36 @@ export type WebviewToExtensionMessage =
   | RequestMessage<"SAVE_FLOW", { flowName: string; nodes: DiscoverySnapshot["nodes"]; edges: DiscoverySnapshot["edges"] }>
   | RequestMessage<"SAVE_NODE_POSITION", { nodeId: string; position: Position }>
   | RequestMessage<"SAVE_NODE_POSITIONS", { positions: Array<{ nodeId: string; position: Position }> }>
+  | RequestMessage<"SCHEDULE_SUBSCRIBE", { runId: string }>
+  | RequestMessage<"SCHEDULE_UNSUBSCRIBE", { runId: string }>
+  | RequestMessage<"SCHEDULE_GET_SNAPSHOT", { runId: string }>
+  | RequestMessage<"TASK_PIN", { runId: string; taskId: string; pinned: boolean }>
+  | RequestMessage<
+      "TASK_MOVE",
+      { runId: string; taskId: string; forceStartMs?: number; forceAgentId?: string }
+    >
+  | RequestMessage<"TASK_SET_PRIORITY", { runId: string; taskId: string; priority?: number }>
+  | RequestMessage<
+      "RUN_FLOW",
+      {
+        flowName: string;
+        backendId?: CliBackendId;
+        runName?: string;
+        tags?: string[];
+        usePinnedOutputs?: boolean;
+      }
+    >
+  | RequestMessage<
+      "RUN_NODE",
+      { flowName: string; nodeId: string; backendId?: CliBackendId; usePinnedOutput?: boolean }
+    >
+  | RequestMessage<"STOP_RUN", { runId: string }>
+  | RequestMessage<"LIST_RUNS", { flowName?: string } | undefined>
+  | RequestMessage<"LOAD_RUN", { flowName: string; runId: string }>
+  | RequestMessage<"PIN_OUTPUT", { flowName: string; nodeId: string; output: unknown }>
+  | RequestMessage<"UNPIN_OUTPUT", { flowName: string; nodeId: string }>
+  | RequestMessage<"SET_AGENT_RUNTIME", { agentId: string; runtime: AgentRuntime | null }>
+  | RequestMessage<"SET_BACKEND_OVERRIDES", { overrides: CliBackendOverrides }>
   | RequestMessage<"LOG_INTERACTION_EVENT", {
       flowName: string;
       interactionId: string;
@@ -293,6 +438,7 @@ export type ExtensionToWebviewMessage =
   | { type: "IMPORT_PREVIEW"; payload: { preview: SkillPackPreview } }
   | { type: "CLI_BACKENDS"; payload: { backends: CliBackend[] } }
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
+  | { type: "SCHEDULE_EVENT"; payload: { event: TaskEvent } }
   | {
       type: "GENERATION_PROGRESS";
       payload: {

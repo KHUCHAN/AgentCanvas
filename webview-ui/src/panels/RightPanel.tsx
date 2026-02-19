@@ -2,23 +2,29 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { Edge, Node } from "reactflow";
 import type {
   CliBackend,
+  CliBackendOverrides,
   DiscoverySnapshot,
+  RunEvent,
+  RunSummary,
+  Task,
   PromptHistoryEntry,
   Skill
 } from "../messaging/protocol";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { PatternIndexItem } from "../patterns/types";
 import PromptPanel from "./PromptPanel";
+import RunPanel from "./RunPanel";
 import { getValidationCounts } from "../utils/validation";
 
 type RightPanelProps = {
-  mode: "library" | "inspector" | "prompt";
+  mode: "library" | "inspector" | "prompt" | "run";
   open: boolean;
   saveSignal: number;
   snapshot?: DiscoverySnapshot;
   selectedNode?: Node;
+  selectedScheduleTaskId?: string;
   selectedEdge?: Edge;
-  onModeChange: (mode: "library" | "inspector" | "prompt") => void;
+  onModeChange: (mode: "library" | "inspector" | "prompt" | "run") => void;
   onOpenFile: (path: string) => void;
   onRevealPath: (path: string) => void;
   onCreateSkill: (name: string, description: string) => void;
@@ -51,6 +57,30 @@ type RightPanelProps = {
   interactionPatterns: PatternIndexItem[];
   onInsertPattern: (patternId: string) => Promise<void>;
   onUpdateInteractionEdge: (edgeId: string, update: { label?: string; data?: Record<string, unknown> }) => void;
+  activeFlowName: string;
+  runBackends: CliBackend[];
+  runHistory: RunSummary[];
+  runEvents: RunEvent[];
+  activeRunId?: string;
+  selectedRunId?: string;
+  selectedScheduleTask?: Task;
+  onRunFlow: (payload: {
+    flowName: string;
+    backendId: CliBackend["id"];
+    usePinnedOutputs: boolean;
+  }) => Promise<void>;
+  onRunNode: (payload: {
+    flowName: string;
+    nodeId: string;
+    backendId: CliBackend["id"];
+    usePinnedOutput: boolean;
+  }) => Promise<void>;
+  onStopRun: (runId: string) => Promise<void>;
+  onRefreshRunHistory: () => Promise<void>;
+  onSelectRun: (runId: string) => Promise<void>;
+  onPinOutput: (flowName: string, nodeId: string, output: unknown) => Promise<void>;
+  onUnpinOutput: (flowName: string, nodeId: string) => Promise<void>;
+  onSetBackendOverrides: (overrides: CliBackendOverrides) => Promise<void>;
 };
 
 export default function RightPanel(props: RightPanelProps) {
@@ -129,6 +159,15 @@ export default function RightPanel(props: RightPanelProps) {
           onClick={() => props.onModeChange("prompt")}
         >
           AI Prompt
+        </button>
+        <button
+          role="tab"
+          aria-selected={props.mode === "run"}
+          aria-controls="right-panel-run"
+          className={props.mode === "run" ? "active" : ""}
+          onClick={() => props.onModeChange("run")}
+        >
+          Run
         </button>
       </div>
 
@@ -359,6 +398,27 @@ export default function RightPanel(props: RightPanelProps) {
           onGenerate={props.onGenerateAgentStructure}
           onDeleteHistory={props.onDeletePromptHistory}
           onReapplyHistory={props.onReapplyPromptHistory}
+        />
+      )}
+
+      {props.mode === "run" && (
+        <RunPanel
+          activeFlowName={props.activeFlowName}
+          selectedNodeId={props.selectedScheduleTaskId ?? props.selectedNode?.id}
+          backends={props.runBackends}
+          runs={props.runHistory}
+          runEvents={props.runEvents}
+          activeRunId={props.activeRunId}
+          selectedRunId={props.selectedRunId}
+          selectedTask={props.selectedScheduleTask}
+          onRunFlow={props.onRunFlow}
+          onRunNode={props.onRunNode}
+          onStopRun={props.onStopRun}
+          onRefreshRuns={props.onRefreshRunHistory}
+          onSelectRun={props.onSelectRun}
+          onPinOutput={props.onPinOutput}
+          onUnpinOutput={props.onUnpinOutput}
+          onSetBackendOverrides={props.onSetBackendOverrides}
         />
       )}
     </aside>

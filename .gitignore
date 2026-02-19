@@ -3,3 +3,5 @@ webview-ui/node_modules/
 extension/dist/
 webview-ui/dist/
 *.vsix
+
+.DS_Store

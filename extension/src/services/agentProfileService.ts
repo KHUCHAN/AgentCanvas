@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentProfile, AgentRole } from "../types";
+import type { AgentProfile, AgentRole, AgentRuntime } from "../types";
 
 const AGENT_PROFILES_DIR = join(".agentcanvas", "agents");
 
@@ -18,7 +18,9 @@ type CreateAgentInput = {
 type AgentProfilePatch = Partial<Pick<
   AgentProfile,
   "role" | "roleLabel" | "description" | "systemPrompt" | "isOrchestrator" | "color" | "avatar"
->>;
+>> & {
+  runtime?: AgentRuntime | null;
+};
 
 function profileDir(workspaceRoot: string): string {
   return join(workspaceRoot, AGENT_PROFILES_DIR);
@@ -65,7 +67,8 @@ export function normalizeAgentProfile(
     homeDir: profile.homeDir || fallback.homeDir,
     delegatesTo: dedupe(profile.delegatesTo),
     assignedSkillIds: dedupe(profile.assignedSkillIds),
-    assignedMcpServerIds: dedupe(profile.assignedMcpServerIds)
+    assignedMcpServerIds: dedupe(profile.assignedMcpServerIds),
+    runtime: profile.runtime
   };
 }
 
@@ -127,6 +130,11 @@ export async function createCustomAgentProfile(input: CreateAgentInput): Promise
     delegatesTo: [],
     assignedSkillIds: [],
     assignedMcpServerIds: [],
+    runtime: {
+      kind: "cli",
+      backendId: "auto",
+      cwdMode: "workspace"
+    },
     avatar: input.isOrchestrator || role === "orchestrator" ? "🎯" : undefined
   };
   await saveAgentProfile(input.workspaceRoot, profile);
@@ -142,6 +150,7 @@ export async function applyAgentProfilePatch(input: {
     {
       ...input.baseProfile,
       ...input.patch,
+      runtime: input.patch.runtime === null ? undefined : input.patch.runtime ?? input.baseProfile.runtime,
       roleLabel: input.patch.roleLabel?.trim() ?? input.baseProfile.roleLabel,
       description: input.patch.description?.trim() ?? input.baseProfile.description,
       systemPrompt: input.patch.systemPrompt?.trim() ?? input.baseProfile.systemPrompt

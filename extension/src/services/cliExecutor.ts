@@ -25,7 +25,7 @@ export async function executeCliPrompt(input: {
   return await new Promise<CliExecutionResult>((resolve) => {
     const child = spawn(input.backend.command, args, {
       cwd: input.workspacePath,
-      env: { ...process.env, NO_COLOR: "1" },
+      env: { ...process.env, ...input.backend.env, NO_COLOR: "1" },
       stdio: ["pipe", "pipe", "pipe"]
     });
 

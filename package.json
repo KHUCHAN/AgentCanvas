@@ -24,6 +24,10 @@
       {
         "command": "agentCanvas.refresh",
         "title": "AgentCanvas: Refresh"
+      },
+      {
+        "command": "agentCanvas.demoScheduleRun",
+        "title": "AgentCanvas: Demo Schedule Run"
       }
     ],
     "configuration": {
@@ -64,6 +68,11 @@
             "type": "string"
           },
           "description": "Additional arguments passed to custom CLI backend."
+        },
+        "agentCanvas.cliBackendOverrides": {
+          "type": "object",
+          "default": {},
+          "description": "Optional command/args/env overrides for claude-code, gemini-cli, codex-cli, aider, and custom backends."
         }
       }
     }

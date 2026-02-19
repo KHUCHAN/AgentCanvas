@@ -21,7 +21,10 @@ async function run() {
     test('Agent profile service CRUD + assignment roundtrip', testAgentProfileRoundtrip),
     test('CLI detector returns known backend entries', testCliDetectorShape),
     test('Flow store save/load/list roundtrip', testFlowStoreRoundtrip),
-    test('Interaction log is appended to JSONL', testInteractionLogRoundtrip)
+    test('Interaction log is appended to JSONL', testInteractionLogRoundtrip),
+    test('Schedule service computes plan and patches updates', testScheduleServiceRoundtrip),
+    test('Run store persists summary and events', testRunStoreRoundtrip),
+    test('Pin store set/get/clear roundtrip', testPinStoreRoundtrip)
   ];
 
   const results = await Promise.all(cases);
@@ -297,6 +300,143 @@ async function testInteractionLogRoundtrip() {
     const row = JSON.parse(lines[lines.length - 1]);
     assert.equal(row.event, 'configured');
     assert.equal(row.interactionId, 'manager_worker');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+async function testScheduleServiceRoundtrip() {
+  const { ScheduleService } = require(path.join(root, 'extension', 'dist', 'schedule', 'scheduleService.js'));
+  const service = new ScheduleService({ defaultEstimateMs: 60000 });
+  const runId = 'run_schedule_test';
+  const events = [];
+  const unsubscribe = service.subscribe(runId, (event) => {
+    events.push(event);
+  });
+
+  service.createRun(runId, [
+    {
+      id: 'task:1',
+      title: 'A',
+      agentId: 'agent:1',
+      deps: [],
+      status: 'planned',
+      estimateMs: 120000,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now()
+    },
+    {
+      id: 'task:2',
+      title: 'B',
+      agentId: 'agent:1',
+      deps: ['task:1'],
+      status: 'planned',
+      estimateMs: 120000,
+      createdAtMs: Date.now() + 1,
+      updatedAtMs: Date.now() + 1
+    }
+  ]);
+
+  const tasks = service.getTasks(runId);
+  assert.equal(tasks.length, 2);
+  const first = tasks.find((task) => task.id === 'task:1');
+  const second = tasks.find((task) => task.id === 'task:2');
+  assert.ok(first, 'first task should exist');
+  assert.ok(second, 'second task should exist');
+  assert.equal(first.plannedStartMs, 0);
+  assert.ok((second.plannedStartMs || 0) >= (first.plannedEndMs || 0), 'second task should start after first');
+
+  service.patchTask(runId, 'task:1', { overrides: { pinned: true } });
+  const updated = service.getTasks(runId).find((task) => task.id === 'task:1');
+  assert.equal(updated?.overrides?.pinned, true);
+
+  assert.ok(events.length > 0, 'expected schedule events to be emitted');
+  unsubscribe();
+}
+
+async function testRunStoreRoundtrip() {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-runs-'));
+  try {
+    const { startRun, appendRunEvent, finishRun, listRuns, loadRunEvents } = require(
+      path.join(root, 'extension', 'dist', 'services', 'runStore.js')
+    );
+    const run = await startRun({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      backendId: 'auto',
+      runName: 'integration'
+    });
+    await appendRunEvent({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      event: {
+        ts: Date.now(),
+        flow: 'default',
+        runId: run.runId,
+        type: 'node_started',
+        nodeId: 'agent:lead'
+      }
+    });
+    await finishRun({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      runId: run.runId,
+      status: 'success'
+    });
+
+    const runs = await listRuns({ workspaceRoot: tmpRoot, flowName: 'default' });
+    assert.ok(runs.length >= 1, 'expected at least one run summary');
+    assert.equal(runs[0].runId, run.runId);
+
+    const events = await loadRunEvents({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      runId: run.runId
+    });
+    assert.ok(events.some((event) => event.type === 'run_started'));
+    assert.ok(events.some((event) => event.type === 'run_finished'));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+async function testPinStoreRoundtrip() {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-pins-'));
+  try {
+    const { setPin, getPin, clearPin, listPins } = require(
+      path.join(root, 'extension', 'dist', 'services', 'pinStore.js')
+    );
+    await setPin({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      nodeId: 'node:1',
+      output: { value: 42 }
+    });
+    const pin = await getPin({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      nodeId: 'node:1'
+    });
+    assert.ok(pin, 'pin should exist');
+    assert.equal(pin.output.value, 42);
+
+    const pins = await listPins({
+      workspaceRoot: tmpRoot,
+      flowName: 'default'
+    });
+    assert.equal(pins.length, 1);
+
+    await clearPin({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      nodeId: 'node:1'
+    });
+    const after = await getPin({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      nodeId: 'node:1'
+    });
+    assert.equal(after, undefined);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

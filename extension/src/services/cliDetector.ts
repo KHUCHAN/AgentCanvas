@@ -1,12 +1,14 @@
-import { access } from "node:fs/promises";
-import { constants } from "node:fs";
 import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
 import { promisify } from "node:util";
-import type { CliBackend } from "../types";
+import type { CliBackend, CliBackendOverride, CliBackendOverrides } from "../types";
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_BACKENDS: Array<Pick<CliBackend, "id" | "displayName" | "command" | "args" | "stdinPrompt">> = [
+const DEFAULT_BACKENDS: Array<
+  Pick<CliBackend, "id" | "displayName" | "command" | "args" | "stdinPrompt">
+> = [
   {
     id: "claude-code",
     displayName: "Claude Code",
@@ -40,19 +42,28 @@ const DEFAULT_BACKENDS: Array<Pick<CliBackend, "id" | "displayName" | "command" 
 export async function detectAllCliBackends(input?: {
   customCliCommand?: string;
   customCliArgs?: string[];
+  backendOverrides?: CliBackendOverrides;
 }): Promise<CliBackend[]> {
   const detected: CliBackend[] = [];
 
   for (const preset of DEFAULT_BACKENDS) {
-    const available = await detectCliCommand(preset.command);
+    const resolved = applyBackendOverride(
+      preset,
+      input?.backendOverrides?.[preset.id as Exclude<CliBackend["id"], "auto">]
+    );
+    const available = await detectCliCommand(resolved.command);
     detected.push({
-      ...preset,
+      ...resolved,
       available,
-      version: available ? await resolveVersion(preset.command) : undefined
+      version: available ? await resolveVersion(resolved.command) : undefined
     });
   }
 
-  const custom = buildCustomBackend(input?.customCliCommand, input?.customCliArgs);
+  const custom = buildCustomBackend(
+    input?.customCliCommand,
+    input?.customCliArgs,
+    input?.backendOverrides?.custom
+  );
   if (custom) {
     const available = await detectCliCommand(custom.command);
     detected.push({
@@ -76,13 +87,13 @@ export async function detectAllCliBackends(input?: {
 
 export function pickPromptBackend(backends: CliBackend[], backendId: CliBackend["id"]): CliBackend {
   if (backendId === "auto") {
-    const preferred = backends.find((backend) =>
-      backend.available && backend.id !== "auto"
-    );
+    const preferred = backends.find((backend) => backend.available && backend.id !== "auto");
     if (preferred) {
       return preferred;
     }
-    throw new Error("No available AI CLI backend was found. Install Claude Code, Gemini CLI, Codex CLI, Aider, or configure custom CLI.");
+    throw new Error(
+      "No available AI CLI backend was found. Install Claude Code, Gemini CLI, Codex CLI, Aider, or configure custom CLI."
+    );
   }
 
   const backend = backends.find((item) => item.id === backendId);
@@ -133,8 +144,12 @@ async function resolveVersion(command: string): Promise<string | undefined> {
   }
 }
 
-function buildCustomBackend(customCliCommand?: string, customCliArgs?: string[]): CliBackend | undefined {
-  const raw = customCliCommand?.trim();
+function buildCustomBackend(
+  customCliCommand?: string,
+  customCliArgs?: string[],
+  override?: CliBackendOverride
+): CliBackend | undefined {
+  const raw = customCliCommand?.trim() || override?.command?.trim();
   if (!raw) {
     return undefined;
   }
@@ -144,17 +159,37 @@ function buildCustomBackend(customCliCommand?: string, customCliArgs?: string[])
     return undefined;
   }
 
-  const command = parsed[0];
-  const inlineArgs = parsed.slice(1);
-  const args = [...inlineArgs, ...(customCliArgs ?? [])].filter((item) => item.trim().length > 0);
+  const parsedCommand = parsed[0];
+  const parsedArgs = parsed.slice(1);
+  const args = (override?.args ?? [...parsedArgs, ...(customCliArgs ?? [])]).filter(
+    (item) => item.trim().length > 0
+  );
 
   return {
     id: "custom",
-    displayName: "Custom CLI",
-    command,
+    displayName: override?.displayName?.trim() || "Custom CLI",
+    command: override?.command?.trim() || parsedCommand,
     args,
+    env: override?.env,
     available: false,
-    stdinPrompt: true
+    stdinPrompt: override?.stdinPrompt ?? true
+  };
+}
+
+function applyBackendOverride(
+  base: Pick<CliBackend, "id" | "displayName" | "command" | "args" | "stdinPrompt" | "env">,
+  override?: CliBackendOverride
+): Pick<CliBackend, "id" | "displayName" | "command" | "args" | "stdinPrompt" | "env"> {
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    displayName: override.displayName?.trim() || base.displayName,
+    command: override.command?.trim() || base.command,
+    args: override.args && override.args.length > 0 ? override.args : base.args,
+    env: override.env ?? base.env,
+    stdinPrompt: override.stdinPrompt ?? base.stdinPrompt
   };
 }
 
@@ -174,7 +209,7 @@ function splitCommand(value: string): string[] {
       continue;
     }
 
-    if (char === "'" || char === '"') {
+    if (char === "'" || char === "\"") {
       quote = char;
       continue;
     }

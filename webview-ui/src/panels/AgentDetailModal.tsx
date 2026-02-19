@@ -1,5 +1,5 @@
 import { KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRole, DiscoverySnapshot } from "../messaging/protocol";
+import type { AgentRole, AgentRuntime, CliBackendId, DiscoverySnapshot } from "../messaging/protocol";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type AgentDetailTab = "overview" | "skills" | "rules" | "mcp";
@@ -25,6 +25,7 @@ type AgentDetailModalProps = {
     color?: string;
     avatar?: string;
   }) => void;
+  onSetRuntime: (agentId: string, runtime: AgentRuntime | null) => void;
   onSetDelegation: (agentId: string, workerIds: string[]) => void;
   onAssignSkill: (agentId: string, skillId: string) => void;
   onUnassignSkill: (agentId: string, skillId: string) => void;
@@ -56,6 +57,7 @@ export default function AgentDetailModal({
   onCreateOverride,
   onExportSkill,
   onUpdateProfile,
+  onSetRuntime,
   onSetDelegation,
   onAssignSkill,
   onUnassignSkill,
@@ -75,6 +77,10 @@ export default function AgentDetailModal({
   const [color, setColor] = useState("");
   const [avatar, setAvatar] = useState("");
   const [delegateIds, setDelegateIds] = useState<string[]>([]);
+  const [runtimeMode, setRuntimeMode] = useState<"default" | "cli" | "openclaw">("default");
+  const [runtimeBackendId, setRuntimeBackendId] = useState<CliBackendId>("auto");
+  const [openClawGateway, setOpenClawGateway] = useState("ws://127.0.0.1:18789");
+  const [openClawAgentKey, setOpenClawAgentKey] = useState("");
 
   useEffect(() => {
     if (!open) {
@@ -129,6 +135,19 @@ export default function AgentDetailModal({
     setColor(agentProfile.color ?? "");
     setAvatar(agentProfile.avatar ?? "");
     setDelegateIds(agentProfile.delegatesTo ?? []);
+    if (!agentProfile.runtime) {
+      setRuntimeMode("default");
+      setRuntimeBackendId("auto");
+      setOpenClawGateway("ws://127.0.0.1:18789");
+      setOpenClawAgentKey("");
+    } else if (agentProfile.runtime.kind === "cli") {
+      setRuntimeMode("cli");
+      setRuntimeBackendId(agentProfile.runtime.backendId);
+    } else {
+      setRuntimeMode("openclaw");
+      setOpenClawGateway(agentProfile.runtime.gatewayUrl ?? "ws://127.0.0.1:18789");
+      setOpenClawAgentKey(agentProfile.runtime.agentKey ?? "");
+    }
   }, [open, agentProfile]);
 
   const allOtherAgents = useMemo(
@@ -178,6 +197,21 @@ export default function AgentDetailModal({
       color: color.trim() || undefined,
       avatar: avatar.trim() || undefined
     });
+    if (runtimeMode === "default") {
+      onSetRuntime(agentId, null);
+    } else if (runtimeMode === "cli") {
+      onSetRuntime(agentId, {
+        kind: "cli",
+        backendId: runtimeBackendId,
+        cwdMode: "workspace"
+      });
+    } else {
+      onSetRuntime(agentId, {
+        kind: "openclaw",
+        gatewayUrl: openClawGateway.trim() || undefined,
+        agentKey: openClawAgentKey.trim() || undefined
+      });
+    }
     onSetDelegation(agentId, isOrchestrator ? delegateIds : []);
   };
 
@@ -295,6 +329,58 @@ export default function AgentDetailModal({
                   <label>Accent color</label>
                   <input value={color} onChange={(event) => setColor(event.target.value)} placeholder="#e8a64a" />
                 </div>
+
+                <div className="inspector-field">
+                  <label>Runtime</label>
+                  <select
+                    value={runtimeMode}
+                    onChange={(event) =>
+                      setRuntimeMode(event.target.value as "default" | "cli" | "openclaw")
+                    }
+                  >
+                    <option value="default">Workspace default</option>
+                    <option value="cli">CLI override</option>
+                    <option value="openclaw">OpenClaw</option>
+                  </select>
+                </div>
+
+                {runtimeMode === "cli" && (
+                  <div className="inspector-field">
+                    <label>CLI backend</label>
+                    <select
+                      value={runtimeBackendId}
+                      onChange={(event) => setRuntimeBackendId(event.target.value as CliBackendId)}
+                    >
+                      <option value="auto">auto</option>
+                      <option value="claude-code">claude-code</option>
+                      <option value="gemini-cli">gemini-cli</option>
+                      <option value="codex-cli">codex-cli</option>
+                      <option value="aider">aider</option>
+                      <option value="custom">custom</option>
+                    </select>
+                  </div>
+                )}
+
+                {runtimeMode === "openclaw" && (
+                  <>
+                    <div className="inspector-field">
+                      <label>Gateway URL</label>
+                      <input
+                        value={openClawGateway}
+                        onChange={(event) => setOpenClawGateway(event.target.value)}
+                        placeholder="ws://127.0.0.1:18789"
+                      />
+                    </div>
+                    <div className="inspector-field">
+                      <label>Agent key (optional)</label>
+                      <input
+                        value={openClawAgentKey}
+                        onChange={(event) => setOpenClawAgentKey(event.target.value)}
+                        placeholder="agent key"
+                      />
+                    </div>
+                  </>
+                )}
 
                 <div className="inspector-field">
                   <label>Delegates To</label>

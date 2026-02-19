@@ -1,10 +1,14 @@
 import type {
+  AgentRuntime,
   AgentRole,
   CliBackend,
+  CliBackendId,
+  CliBackendOverrides,
   DiscoverySnapshot,
   GeneratedAgentStructure,
   PromptHistoryEntry,
-  SkillPackPreview
+  SkillPackPreview,
+  TaskEvent
 } from "../types";
 
 export type RequestId = string;
@@ -118,6 +122,36 @@ export type WebviewToExtensionMessage =
   | RequestMessage<"SAVE_FLOW", { flowName: string; nodes: DiscoverySnapshot["nodes"]; edges: DiscoverySnapshot["edges"] }>
   | RequestMessage<"SAVE_NODE_POSITION", { nodeId: string; position: Position }>
   | RequestMessage<"SAVE_NODE_POSITIONS", { positions: Array<{ nodeId: string; position: Position }> }>
+  | RequestMessage<"SCHEDULE_SUBSCRIBE", { runId: string }>
+  | RequestMessage<"SCHEDULE_UNSUBSCRIBE", { runId: string }>
+  | RequestMessage<"SCHEDULE_GET_SNAPSHOT", { runId: string }>
+  | RequestMessage<"TASK_PIN", { runId: string; taskId: string; pinned: boolean }>
+  | RequestMessage<
+      "TASK_MOVE",
+      { runId: string; taskId: string; forceStartMs?: number; forceAgentId?: string }
+    >
+  | RequestMessage<"TASK_SET_PRIORITY", { runId: string; taskId: string; priority?: number }>
+  | RequestMessage<
+      "RUN_FLOW",
+      {
+        flowName: string;
+        backendId?: CliBackendId;
+        runName?: string;
+        tags?: string[];
+        usePinnedOutputs?: boolean;
+      }
+    >
+  | RequestMessage<
+      "RUN_NODE",
+      { flowName: string; nodeId: string; backendId?: CliBackendId; usePinnedOutput?: boolean }
+    >
+  | RequestMessage<"STOP_RUN", { runId: string }>
+  | RequestMessage<"LIST_RUNS", { flowName?: string } | undefined>
+  | RequestMessage<"LOAD_RUN", { flowName: string; runId: string }>
+  | RequestMessage<"PIN_OUTPUT", { flowName: string; nodeId: string; output: unknown }>
+  | RequestMessage<"UNPIN_OUTPUT", { flowName: string; nodeId: string }>
+  | RequestMessage<"SET_AGENT_RUNTIME", { agentId: string; runtime: AgentRuntime | null }>
+  | RequestMessage<"SET_BACKEND_OVERRIDES", { overrides: CliBackendOverrides }>
   | RequestMessage<"LOG_INTERACTION_EVENT", {
       flowName: string;
       interactionId: string;
@@ -138,6 +172,7 @@ export type ExtensionToWebviewMessage =
   | { type: "IMPORT_PREVIEW"; payload: { preview: SkillPackPreview } }
   | { type: "CLI_BACKENDS"; payload: { backends: CliBackend[] } }
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
+  | { type: "SCHEDULE_EVENT"; payload: { event: TaskEvent } }
   | {
       type: "GENERATION_PROGRESS";
       payload: {

@@ -141,6 +141,8 @@ function isValidExtensionMessage(value: unknown): value is ExtensionToWebviewMes
       return hasObjectPayload(message, "payload") && Array.isArray(message.payload.backends);
     case "PROMPT_HISTORY":
       return hasObjectPayload(message, "payload") && Array.isArray(message.payload.items);
+    case "SCHEDULE_EVENT":
+      return hasObjectPayload(message, "payload") && isObject(message.payload.event);
     case "GENERATION_PROGRESS":
       return (
         hasObjectPayload(message, "payload") &&

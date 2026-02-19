@@ -9,6 +9,20 @@ export type AgentRole =
   | "writer"
   | "custom";
 
+export type CliBackendId = "auto" | "claude-code" | "gemini-cli" | "codex-cli" | "aider" | "custom";
+
+export type AgentRuntime =
+  | {
+      kind: "cli";
+      backendId: CliBackendId;
+      cwdMode?: "workspace" | "agentHome";
+    }
+  | {
+      kind: "openclaw";
+      gatewayUrl?: string;
+      agentKey?: string;
+    };
+
 export interface ValidationIssue {
   level: "error" | "warning";
   code: string;
@@ -30,6 +44,7 @@ export interface AgentProfile {
   delegatesTo?: string[];
   assignedSkillIds?: string[];
   assignedMcpServerIds?: string[];
+  runtime?: AgentRuntime;
   color?: string;
   avatar?: string;
 }
@@ -104,14 +119,25 @@ export interface StickyNote {
 }
 
 export interface CliBackend {
-  id: "auto" | "claude-code" | "gemini-cli" | "codex-cli" | "aider" | "custom";
+  id: CliBackendId;
   displayName: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
   available: boolean;
   version?: string;
   stdinPrompt?: boolean;
 }
+
+export interface CliBackendOverride {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  displayName?: string;
+  stdinPrompt?: boolean;
+}
+
+export type CliBackendOverrides = Partial<Record<Exclude<CliBackendId, "auto">, CliBackendOverride>>;
 
 export interface GeneratedAgent {
   name: string;
@@ -169,4 +195,93 @@ export interface SkillPackPreview {
   installDirDefault: string;
   skills: SkillPackPreviewItem[];
   warnings: string[];
+}
+
+export type TaskStatus =
+  | "planned"
+  | "ready"
+  | "running"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "canceled";
+
+export type TaskBlocker =
+  | { kind: "approval"; message: string }
+  | { kind: "input"; message: string }
+  | { kind: "external"; message: string }
+  | { kind: "error"; message: string; stack?: string };
+
+export interface Task {
+  id: string;
+  title: string;
+  agentId: string;
+  deps: string[];
+  estimateMs?: number;
+  plannedStartMs?: number;
+  plannedEndMs?: number;
+  actualStartMs?: number;
+  actualEndMs?: number;
+  progress?: number;
+  status: TaskStatus;
+  blocker?: TaskBlocker;
+  overrides?: {
+    pinned?: boolean;
+    forceStartMs?: number;
+    forceAgentId?: string;
+    priority?: number;
+  };
+  meta?: Record<string, unknown>;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export type TaskEvent =
+  | { type: "snapshot"; runId: string; tasks: Task[]; nowMs: number }
+  | { type: "task_created"; runId: string; task: Task; nowMs: number }
+  | { type: "task_updated"; runId: string; taskId: string; patch: Partial<Task>; nowMs: number }
+  | { type: "task_deleted"; runId: string; taskId: string; nowMs: number }
+  | { type: "schedule_recomputed"; runId: string; affectedTaskIds: string[]; nowMs: number };
+
+export type RunStatus = "running" | "success" | "failed" | "stopped";
+
+export interface RunSummary {
+  runId: string;
+  flow: string;
+  startedAt: number;
+  finishedAt?: number;
+  status: RunStatus;
+  backendId?: CliBackendId;
+  runName?: string;
+  tags?: string[];
+}
+
+export interface RunEvent {
+  ts: number;
+  runId: string;
+  flow: string;
+  type:
+    | "run_started"
+    | "run_finished"
+    | "node_started"
+    | "node_output"
+    | "node_failed"
+    | "edge_fired"
+    | "run_log";
+  nodeId?: string;
+  edgeId?: string;
+  input?: unknown;
+  output?: unknown;
+  payload?: unknown;
+  usage?: Record<string, number>;
+  status?: RunStatus;
+  message?: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface PinnedOutput {
+  flowName: string;
+  nodeId: string;
+  output: unknown;
+  pinnedAt: number;
 }

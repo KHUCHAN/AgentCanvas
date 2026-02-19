@@ -29,20 +29,40 @@ import {
   listFlows as listFlowFiles,
   loadFlow as loadFlowFile,
   logInteractionEvent as writeInteractionLog,
-  saveFlow as saveFlowFile
+  saveFlow as saveFlowFile,
+  sanitizeFlowName
 } from "./services/flowStore";
 import { exists, getHomeDir } from "./services/pathUtils";
 import { appendPromptHistory, findPromptHistory, markPromptHistoryApplied, readPromptHistory, removePromptHistory } from "./services/promptHistory";
 import { buildAgentGenerationPrompt } from "./services/promptBuilder";
+import { clearPin, getPin, setPin } from "./services/pinStore";
+import {
+  appendRunEvent,
+  finishRun,
+  listRuns as listRunHistory,
+  loadRunEvents,
+  startRun
+} from "./services/runStore";
 import { updateSkillFrontmatter } from "./services/skillEditor";
 import { exportSkillPack, importSkillPack, previewSkillPack } from "./services/zipPack";
+import { ScheduleService } from "./schedule/scheduleService";
 import type {
   ExtensionToWebviewMessage,
   WebviewToExtensionMessage
 } from "./messages/protocol";
 import { hasRequestId } from "./messages/protocol";
-import type { AgentProfile, DiscoverySnapshot, StudioEdge, StickyNote } from "./types";
-import type { CliBackend, GeneratedAgentStructure } from "./types";
+import type {
+  AgentProfile,
+  CliBackend,
+  CliBackendId,
+  CliBackendOverrides,
+  DiscoverySnapshot,
+  GeneratedAgentStructure,
+  Task,
+  TaskEvent,
+  StudioEdge,
+  StickyNote
+} from "./types";
 
 let panelController: AgentCanvasPanel | undefined;
 
@@ -59,6 +79,13 @@ export function activate(context: vscode.ExtensionContext): void {
       await panelController.refreshState(true);
     })
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("agentCanvas.demoScheduleRun", async () => {
+      panelController = await AgentCanvasPanel.createOrShow(context);
+      await panelController.startDemoScheduleRun();
+    })
+  );
 }
 
 export function deactivate(): void {
@@ -70,6 +97,7 @@ class AgentCanvasPanel {
   private readonly providers: Provider[];
   private readonly panel: vscode.WebviewPanel;
   private readonly extensionContext: vscode.ExtensionContext;
+  private readonly scheduleService = new ScheduleService({ defaultEstimateMs: 120_000 });
   private snapshot: DiscoverySnapshot | undefined;
   private notes: StickyNote[] = [];
   private notesLoaded = false;
@@ -77,6 +105,10 @@ class AgentCanvasPanel {
   private agentLinksLoaded = false;
   private nodePositions: Map<string, { x: number; y: number }> = new Map();
   private nodePositionsLoaded = false;
+  private scheduleSubscriberByRunId = new Map<string, (event: TaskEvent) => void>();
+  private demoRunTimers = new Map<string, NodeJS.Timeout>();
+  private activeRunStops = new Map<string, () => void>();
+  private activeRunFlowById = new Map<string, string>();
 
   private constructor(panel: vscode.WebviewPanel, extensionContext: vscode.ExtensionContext) {
     this.panel = panel;
@@ -84,6 +116,16 @@ class AgentCanvasPanel {
     this.providers = [new AgentSkillsProvider(), new CodexGuidanceProvider()];
 
     this.panel.onDidDispose(() => {
+      for (const [runId, subscriber] of this.scheduleSubscriberByRunId.entries()) {
+        this.scheduleService.unsubscribe(runId, subscriber);
+      }
+      this.scheduleSubscriberByRunId.clear();
+      for (const timer of this.demoRunTimers.values()) {
+        clearInterval(timer);
+      }
+      this.demoRunTimers.clear();
+      this.activeRunStops.clear();
+      this.activeRunFlowById.clear();
       if (panelController === this) {
         panelController = undefined;
       }
@@ -521,6 +563,110 @@ class AgentCanvasPanel {
       case "SAVE_NODE_POSITIONS": {
         await this.saveNodePositions(message.payload.positions);
         return { ok: true };
+      }
+      case "SCHEDULE_SUBSCRIBE": {
+        this.subscribeSchedule(message.payload.runId);
+        return { ok: true };
+      }
+      case "SCHEDULE_UNSUBSCRIBE": {
+        this.unsubscribeSchedule(message.payload.runId);
+        return { ok: true };
+      }
+      case "SCHEDULE_GET_SNAPSHOT": {
+        return { event: this.scheduleService.getSnapshotEvent(message.payload.runId) };
+      }
+      case "TASK_PIN": {
+        await this.pinTask(message.payload.runId, message.payload.taskId, message.payload.pinned);
+        return { ok: true };
+      }
+      case "TASK_MOVE": {
+        await this.moveTask(
+          message.payload.runId,
+          message.payload.taskId,
+          message.payload.forceStartMs,
+          message.payload.forceAgentId
+        );
+        return { ok: true };
+      }
+      case "TASK_SET_PRIORITY": {
+        await this.setTaskPriority(
+          message.payload.runId,
+          message.payload.taskId,
+          message.payload.priority
+        );
+        return { ok: true };
+      }
+      case "RUN_FLOW": {
+        return await this.runFlow({
+          flowName: message.payload.flowName,
+          backendId: message.payload.backendId,
+          runName: message.payload.runName,
+          tags: message.payload.tags,
+          usePinnedOutputs: message.payload.usePinnedOutputs
+        });
+      }
+      case "RUN_NODE": {
+        return await this.runSingleNode({
+          flowName: message.payload.flowName,
+          nodeId: message.payload.nodeId,
+          backendId: message.payload.backendId,
+          usePinnedOutput: message.payload.usePinnedOutput
+        });
+      }
+      case "STOP_RUN": {
+        await this.stopRun(message.payload.runId);
+        return { ok: true };
+      }
+      case "LIST_RUNS": {
+        const flowName =
+          "payload" in message && message.payload ? message.payload.flowName : undefined;
+        return {
+          runs: await listRunHistory({
+            workspaceRoot: this.getWorkspaceRoot(),
+            flowName,
+            limit: 100
+          })
+        };
+      }
+      case "LOAD_RUN": {
+        return {
+          events: await loadRunEvents({
+            workspaceRoot: this.getWorkspaceRoot(),
+            flowName: message.payload.flowName,
+            runId: message.payload.runId
+          })
+        };
+      }
+      case "PIN_OUTPUT": {
+        const pin = await setPin({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName: message.payload.flowName,
+          nodeId: message.payload.nodeId,
+          output: message.payload.output
+        });
+        return { pin };
+      }
+      case "UNPIN_OUTPUT": {
+        await clearPin({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName: message.payload.flowName,
+          nodeId: message.payload.nodeId
+        });
+        return { ok: true };
+      }
+      case "SET_AGENT_RUNTIME": {
+        await this.setAgentRuntime(message.payload.agentId, message.payload.runtime);
+        await this.refreshState();
+        return { ok: true };
+      }
+      case "SET_BACKEND_OVERRIDES": {
+        await this.setBackendOverrides(message.payload.overrides);
+        const backends = await this.detectCliBackends();
+        this.postMessage({
+          type: "CLI_BACKENDS",
+          payload: { backends }
+        });
+        return { backends };
       }
       case "LOG_INTERACTION_EVENT": {
         await this.logInteractionEvent({
@@ -1228,6 +1374,764 @@ class AgentCanvasPanel {
     });
   }
 
+  public async startDemoScheduleRun(): Promise<{ runId: string }> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const flowName = "demo-schedule";
+    const run = await startRun({
+      workspaceRoot,
+      flowName,
+      backendId: "auto",
+      runName: "Demo Schedule"
+    });
+    const runId = run.runId;
+
+    const agentIds =
+      (this.snapshot?.agents ?? []).slice(0, 3).map((agent) => agent.id).length >= 3
+        ? (this.snapshot?.agents ?? []).slice(0, 3).map((agent) => agent.id)
+        : ["demo:planner", "demo:coder", "demo:tester"];
+
+    const taskTemplates: Array<{ id: string; title: string; lane: number; deps: string[] }> = [
+      { id: "t1", title: "Collect requirements", lane: 0, deps: [] },
+      { id: "t2", title: "Design architecture", lane: 0, deps: ["t1"] },
+      { id: "t3", title: "Implement API", lane: 1, deps: ["t2"] },
+      { id: "t4", title: "Implement UI", lane: 1, deps: ["t2"] },
+      { id: "t5", title: "Write integration tests", lane: 2, deps: ["t3", "t4"] },
+      { id: "t6", title: "Run test suite", lane: 2, deps: ["t5"] },
+      { id: "t7", title: "Fix regressions", lane: 1, deps: ["t6"] },
+      { id: "t8", title: "Review and merge", lane: 0, deps: ["t7"] },
+      { id: "t9", title: "Prepare release notes", lane: 2, deps: ["t8"] },
+      { id: "t10", title: "Ship release", lane: 0, deps: ["t8", "t9"] }
+    ];
+
+    const idMap = new Map<string, string>();
+    const now = Date.now();
+    const tasks: Task[] = taskTemplates.map((template, index) => {
+      const taskId = `task:${runId}:${template.id}`;
+      idMap.set(template.id, taskId);
+      return {
+        id: taskId,
+        title: template.title,
+        agentId: agentIds[template.lane] ?? agentIds[0],
+        deps: [],
+        estimateMs: 90_000 + (index % 3) * 45_000,
+        status: "planned",
+        progress: 0,
+        meta: {
+          nodeId: template.id,
+          source: "demo"
+        },
+        createdAtMs: now + index,
+        updatedAtMs: now + index
+      };
+    });
+
+    for (const template of taskTemplates) {
+      const taskId = idMap.get(template.id);
+      if (!taskId) {
+        continue;
+      }
+      const task = tasks.find((item) => item.id === taskId);
+      if (!task) {
+        continue;
+      }
+      task.deps = template.deps.map((dep) => idMap.get(dep)).filter((dep): dep is string => Boolean(dep));
+    }
+
+    this.scheduleService.createRun(runId, tasks);
+    this.activeRunFlowById.set(runId, flowName);
+
+    let stopped = false;
+    const stop = () => {
+      stopped = true;
+    };
+    this.activeRunStops.set(runId, stop);
+
+    const timer = setInterval(async () => {
+      try {
+        const current = this.scheduleService.getTasks(runId);
+        const running = current.find((task) => task.status === "running");
+
+        if (stopped) {
+          for (const task of current) {
+            if (task.status === "done" || task.status === "failed" || task.status === "canceled") {
+              continue;
+            }
+            this.scheduleService.patchTask(runId, task.id, {
+              status: "canceled",
+              actualEndMs: Date.now()
+            });
+          }
+          this.scheduleService.recompute(runId);
+          await finishRun({
+            workspaceRoot,
+            flowName,
+            runId,
+            status: "stopped",
+            message: "Stopped by user"
+          });
+          clearInterval(timer);
+          this.demoRunTimers.delete(runId);
+          this.activeRunStops.delete(runId);
+          this.activeRunFlowById.delete(runId);
+          return;
+        }
+
+        if (running) {
+          const nextProgress = Math.min(1, (running.progress ?? 0) + 0.25);
+          if (nextProgress >= 1) {
+            this.scheduleService.patchTask(runId, running.id, {
+              progress: 1,
+              status: "done",
+              actualEndMs: Date.now()
+            });
+            await appendRunEvent({
+              workspaceRoot,
+              flowName,
+              event: {
+                ts: Date.now(),
+                flow: flowName,
+                runId,
+                type: "node_output",
+                nodeId: String(running.meta?.nodeId ?? running.id),
+                output: {
+                  summary: `${running.title} completed`
+                }
+              }
+            });
+          } else {
+            this.scheduleService.patchTask(runId, running.id, { progress: nextProgress });
+          }
+          this.scheduleService.recompute(runId);
+        } else {
+          const runnable = current.find((task) => {
+            if (!(task.status === "planned" || task.status === "ready")) {
+              return false;
+            }
+            return task.deps.every((depId) => current.find((item) => item.id === depId)?.status === "done");
+          });
+
+          if (runnable) {
+            this.scheduleService.patchTask(runId, runnable.id, {
+              status: "running",
+              progress: 0,
+              actualStartMs: Date.now()
+            });
+            await appendRunEvent({
+              workspaceRoot,
+              flowName,
+              event: {
+                ts: Date.now(),
+                flow: flowName,
+                runId,
+                type: "node_started",
+                nodeId: String(runnable.meta?.nodeId ?? runnable.id),
+                input: {
+                  title: runnable.title
+                }
+              }
+            });
+            this.scheduleService.recompute(runId);
+          } else if (
+            current.every(
+              (task) =>
+                task.status === "done" ||
+                task.status === "failed" ||
+                task.status === "canceled"
+            )
+          ) {
+            await finishRun({
+              workspaceRoot,
+              flowName,
+              runId,
+              status: "success"
+            });
+            clearInterval(timer);
+            this.demoRunTimers.delete(runId);
+            this.activeRunStops.delete(runId);
+            this.activeRunFlowById.delete(runId);
+            this.toast("info", `Demo schedule run complete: ${runId}`);
+          }
+        }
+      } catch (error) {
+        clearInterval(timer);
+        this.demoRunTimers.delete(runId);
+        this.activeRunStops.delete(runId);
+        this.activeRunFlowById.delete(runId);
+        const detail = error instanceof Error ? error.message : String(error);
+        await finishRun({
+          workspaceRoot,
+          flowName,
+          runId,
+          status: "failed",
+          message: detail
+        });
+        this.toast("error", `Demo schedule run failed: ${detail}`);
+      }
+    }, 1000);
+
+    this.demoRunTimers.set(runId, timer);
+    this.toast("info", `Demo schedule started: ${runId}`);
+    return { runId };
+  }
+
+  private subscribeSchedule(runId: string): void {
+    if (this.scheduleSubscriberByRunId.has(runId)) {
+      return;
+    }
+    const subscriber = (event: TaskEvent) => {
+      this.postMessage({
+        type: "SCHEDULE_EVENT",
+        payload: { event }
+      });
+    };
+    this.scheduleSubscriberByRunId.set(runId, subscriber);
+    this.scheduleService.subscribe(runId, subscriber);
+  }
+
+  private unsubscribeSchedule(runId: string): void {
+    const subscriber = this.scheduleSubscriberByRunId.get(runId);
+    if (!subscriber) {
+      return;
+    }
+    this.scheduleService.unsubscribe(runId, subscriber);
+    this.scheduleSubscriberByRunId.delete(runId);
+  }
+
+  private async pinTask(runId: string, taskId: string, pinned: boolean): Promise<void> {
+    this.scheduleService.patchTask(runId, taskId, {
+      overrides: {
+        pinned
+      }
+    });
+    this.scheduleService.recompute(runId);
+  }
+
+  private async moveTask(
+    runId: string,
+    taskId: string,
+    forceStartMs?: number,
+    forceAgentId?: string
+  ): Promise<void> {
+    this.scheduleService.patchTask(runId, taskId, {
+      overrides: {
+        forceStartMs,
+        forceAgentId
+      }
+    });
+    this.scheduleService.recompute(runId);
+  }
+
+  private async setTaskPriority(runId: string, taskId: string, priority?: number): Promise<void> {
+    this.scheduleService.patchTask(runId, taskId, {
+      overrides: {
+        priority
+      }
+    });
+    this.scheduleService.recompute(runId);
+  }
+
+  private async runFlow(input: {
+    flowName: string;
+    backendId?: CliBackendId;
+    runName?: string;
+    tags?: string[];
+    usePinnedOutputs?: boolean;
+  }): Promise<{ runId: string; flowName: string; taskCount: number }> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const flow = await this.tryLoadFlowDefinition(input.flowName);
+    const run = await startRun({
+      workspaceRoot,
+      flowName: flow.flowName,
+      backendId: input.backendId ?? "auto",
+      runName: input.runName,
+      tags: input.tags
+    });
+
+    const tasks = this.buildTasksFromFlow(run.runId, flow.nodes, flow.edges);
+    this.scheduleService.createRun(run.runId, tasks);
+    this.activeRunFlowById.set(run.runId, flow.flowName);
+
+    void this.executeRunLoop({
+      runId: run.runId,
+      flowName: flow.flowName,
+      nodes: flow.nodes,
+      edges: flow.edges,
+      requestedBackendId: input.backendId,
+      usePinnedOutputs: input.usePinnedOutputs
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.toast("error", `Run failed: ${detail}`);
+    });
+
+    return {
+      runId: run.runId,
+      flowName: flow.flowName,
+      taskCount: tasks.length
+    };
+  }
+
+  private async runSingleNode(input: {
+    flowName: string;
+    nodeId: string;
+    backendId?: CliBackendId;
+    usePinnedOutput?: boolean;
+  }): Promise<{ runId: string; flowName: string; nodeId: string }> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const flow = await this.tryLoadFlowDefinition(input.flowName);
+    const node = flow.nodes.find((item) => item.id === input.nodeId);
+    if (!node) {
+      throw new Error(`Node not found in flow: ${input.nodeId}`);
+    }
+
+    const run = await startRun({
+      workspaceRoot,
+      flowName: flow.flowName,
+      backendId: input.backendId ?? "auto",
+      runName: `Single node: ${input.nodeId}`
+    });
+
+    const now = Date.now();
+    const task: Task = {
+      id: `task:${run.runId}:${sanitizeRunNodeId(node.id)}`,
+      title: this.resolveNodeTitle(node),
+      agentId: node.type === "agent" ? node.id : `system:${node.id}`,
+      deps: [],
+      status: "planned",
+      progress: 0,
+      createdAtMs: now,
+      updatedAtMs: now,
+      meta: {
+        nodeId: node.id,
+        nodeType: node.type
+      }
+    };
+    this.scheduleService.createRun(run.runId, [task]);
+    this.activeRunFlowById.set(run.runId, flow.flowName);
+
+    void this.executeRunLoop({
+      runId: run.runId,
+      flowName: flow.flowName,
+      nodes: [node],
+      edges: [],
+      requestedBackendId: input.backendId,
+      usePinnedOutputs: input.usePinnedOutput
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.toast("error", `Run failed: ${detail}`);
+    });
+
+    return { runId: run.runId, flowName: flow.flowName, nodeId: input.nodeId };
+  }
+
+  private async stopRun(runId: string): Promise<void> {
+    const stop = this.activeRunStops.get(runId);
+    if (stop) {
+      stop();
+      return;
+    }
+    const flowName = this.activeRunFlowById.get(runId) ?? "default";
+    await finishRun({
+      workspaceRoot: this.getWorkspaceRoot(),
+      flowName,
+      runId,
+      status: "stopped",
+      message: "Stopped by user"
+    });
+    this.activeRunFlowById.delete(runId);
+  }
+
+  private async executeRunLoop(input: {
+    runId: string;
+    flowName: string;
+    nodes: DiscoverySnapshot["nodes"];
+    edges: DiscoverySnapshot["edges"];
+    requestedBackendId?: CliBackendId;
+    usePinnedOutputs?: boolean;
+  }): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const taskOutputs = new Map<string, unknown>();
+    const nodeById = new Map(input.nodes.map((node) => [node.id, node] as const));
+    let stopped = false;
+    let failedMessage: string | undefined;
+
+    this.activeRunFlowById.set(input.runId, input.flowName);
+    this.activeRunStops.set(input.runId, () => {
+      stopped = true;
+    });
+
+    while (true) {
+      if (stopped) {
+        const current = this.scheduleService.getTasks(input.runId);
+        for (const task of current) {
+          if (task.status === "done" || task.status === "failed" || task.status === "canceled") {
+            continue;
+          }
+          this.scheduleService.patchTask(input.runId, task.id, {
+            status: "canceled",
+            actualEndMs: Date.now()
+          });
+        }
+        this.scheduleService.recompute(input.runId);
+        break;
+      }
+
+      const tasks = this.scheduleService.getTasks(input.runId);
+      const hasFailure = tasks.some((task) => task.status === "failed");
+      if (hasFailure) {
+        failedMessage = "One or more tasks failed";
+        break;
+      }
+
+      const allFinished =
+        tasks.length > 0 &&
+        tasks.every(
+          (task) =>
+            task.status === "done" ||
+            task.status === "failed" ||
+            task.status === "canceled"
+        );
+      if (allFinished) {
+        break;
+      }
+
+      const nextTask = tasks.find((task) => {
+        if (!(task.status === "planned" || task.status === "ready")) {
+          return false;
+        }
+        return task.deps.every((depId) => tasks.find((item) => item.id === depId)?.status === "done");
+      });
+
+      if (!nextTask) {
+        await sleep(120);
+        continue;
+      }
+
+      this.scheduleService.patchTask(input.runId, nextTask.id, {
+        status: "running",
+        actualStartMs: Date.now(),
+        progress: 0
+      });
+      await appendRunEvent({
+        workspaceRoot,
+        flowName: input.flowName,
+        event: {
+          ts: Date.now(),
+          flow: input.flowName,
+          runId: input.runId,
+          type: "node_started",
+          nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+          input: {
+            title: nextTask.title
+          }
+        }
+      });
+
+      const pinned =
+        input.usePinnedOutputs && nextTask.meta?.nodeId
+          ? await getPin({
+              workspaceRoot,
+              flowName: input.flowName,
+              nodeId: String(nextTask.meta.nodeId)
+            })
+          : undefined;
+
+      if (pinned) {
+        taskOutputs.set(nextTask.id, pinned.output);
+        this.scheduleService.patchTask(input.runId, nextTask.id, {
+          status: "done",
+          progress: 1,
+          actualEndMs: Date.now(),
+          meta: {
+            ...(nextTask.meta ?? {}),
+            source: "pinned"
+          }
+        });
+        await appendRunEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          event: {
+            ts: Date.now(),
+            flow: input.flowName,
+            runId: input.runId,
+            type: "node_output",
+            nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+            output: pinned.output,
+            meta: {
+              source: "pinned"
+            }
+          }
+        });
+        this.scheduleService.recompute(input.runId);
+        continue;
+      }
+
+      const node = nodeById.get(String(nextTask.meta?.nodeId ?? ""));
+      const backend = await this.resolveBackendForTask(input.requestedBackendId, node);
+      const prompt = this.buildTaskPrompt(nextTask, node, taskOutputs, input.flowName);
+      const result = await executeCliPrompt({
+        backend,
+        prompt,
+        workspacePath: this.getWorkspaceRoot(),
+        timeoutMs: 120_000
+      });
+
+      if (result.success) {
+        taskOutputs.set(nextTask.id, result.output);
+        this.scheduleService.patchTask(input.runId, nextTask.id, {
+          status: "done",
+          progress: 1,
+          actualEndMs: Date.now(),
+          meta: {
+            ...(nextTask.meta ?? {}),
+            backendId: backend.id
+          }
+        });
+        await appendRunEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          event: {
+            ts: Date.now(),
+            flow: input.flowName,
+            runId: input.runId,
+            type: "node_output",
+            nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+            output: result.output,
+            meta: {
+              backendId: backend.id,
+              durationMs: result.durationMs
+            }
+          }
+        });
+      } else {
+        failedMessage = result.error || "CLI execution failed";
+        this.scheduleService.patchTask(input.runId, nextTask.id, {
+          status: "failed",
+          actualEndMs: Date.now(),
+          blocker: {
+            kind: "error",
+            message: failedMessage
+          },
+          meta: {
+            ...(nextTask.meta ?? {}),
+            backendId: backend.id
+          }
+        });
+        await appendRunEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          event: {
+            ts: Date.now(),
+            flow: input.flowName,
+            runId: input.runId,
+            type: "node_failed",
+            nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+            message: failedMessage,
+            meta: {
+              backendId: backend.id,
+              durationMs: result.durationMs
+            }
+          }
+        });
+      }
+
+      this.scheduleService.recompute(input.runId);
+      if (failedMessage) {
+        break;
+      }
+    }
+
+    const status = stopped ? "stopped" : failedMessage ? "failed" : "success";
+    await finishRun({
+      workspaceRoot,
+      flowName: input.flowName,
+      runId: input.runId,
+      status,
+      message: failedMessage
+    });
+    this.activeRunStops.delete(input.runId);
+    this.activeRunFlowById.delete(input.runId);
+  }
+
+  private buildTasksFromFlow(
+    runId: string,
+    nodes: DiscoverySnapshot["nodes"],
+    edges: DiscoverySnapshot["edges"]
+  ): Task[] {
+    const executableNodes = nodes.filter((node) => node.type === "agent" || node.type === "system");
+    if (executableNodes.length === 0) {
+      const now = Date.now();
+      return [
+        {
+          id: `task:${runId}:default`,
+          title: "Workspace run",
+          agentId: this.snapshot?.agent.id ?? "workspace",
+          deps: [],
+          status: "planned",
+          progress: 0,
+          createdAtMs: now,
+          updatedAtMs: now,
+          meta: {
+            nodeId: this.snapshot?.agent.id ?? "workspace",
+            nodeType: "system"
+          }
+        }
+      ];
+    }
+
+    const nodeIdSet = new Set(executableNodes.map((node) => node.id));
+    const upstream = new Map<string, string[]>();
+    for (const node of executableNodes) {
+      upstream.set(node.id, []);
+    }
+
+    for (const edge of edges) {
+      if (!nodeIdSet.has(edge.source) || !nodeIdSet.has(edge.target)) {
+        continue;
+      }
+      if (
+        edge.type !== "interaction" &&
+        edge.type !== "delegates" &&
+        edge.type !== "agentLink" &&
+        edge.type !== "contains"
+      ) {
+        continue;
+      }
+      upstream.get(edge.target)?.push(edge.source);
+    }
+
+    const taskIdByNodeId = new Map<string, string>();
+    const now = Date.now();
+    const tasks: Task[] = executableNodes.map((node, index) => {
+      const taskId = `task:${runId}:${sanitizeRunNodeId(node.id)}`;
+      taskIdByNodeId.set(node.id, taskId);
+      const task: Task = {
+        id: taskId,
+        title: this.resolveNodeTitle(node),
+        agentId: node.type === "agent" ? node.id : `system:${node.id}`,
+        deps: [],
+        status: "planned",
+        progress: 0,
+        estimateMs: 90_000 + (index % 2) * 45_000,
+        createdAtMs: now + index,
+        updatedAtMs: now + index,
+        meta: {
+          nodeId: node.id,
+          nodeType: node.type
+        }
+      };
+      return task;
+    });
+
+    for (const task of tasks) {
+      const nodeId = String(task.meta?.nodeId ?? "");
+      const deps = upstream.get(nodeId) ?? [];
+      task.deps = deps
+        .map((depNodeId) => taskIdByNodeId.get(depNodeId))
+        .filter((depTaskId): depTaskId is string => Boolean(depTaskId));
+    }
+    return tasks;
+  }
+
+  private buildTaskPrompt(
+    task: Task,
+    node: DiscoverySnapshot["nodes"][number] | undefined,
+    outputs: Map<string, unknown>,
+    flowName: string
+  ): string {
+    const data = (node?.data ?? {}) as Record<string, unknown>;
+    const name = String(data.name ?? data.title ?? task.title);
+    const role = String(data.role ?? (node?.type === "agent" ? "agent" : "system"));
+    const systemPrompt = String(data.systemPrompt ?? data.description ?? "").trim();
+    const dependencyOutputs = task.deps
+      .map((depId) => ({
+        taskId: depId,
+        output: outputs.get(depId)
+      }))
+      .filter((item) => item.output !== undefined);
+
+    return [
+      `Flow: ${flowName}`,
+      `Node: ${name}`,
+      `Role: ${role}`,
+      `Task: ${task.title}`,
+      systemPrompt ? `System Prompt:\n${systemPrompt}` : "",
+      dependencyOutputs.length > 0
+        ? `Upstream outputs:\n${JSON.stringify(dependencyOutputs, null, 2)}`
+        : "",
+      "Return concise plain text output."
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  private resolveNodeTitle(node: DiscoverySnapshot["nodes"][number]): string {
+    const data = node.data as Record<string, unknown>;
+    return String(data.name ?? data.title ?? data.role ?? node.id);
+  }
+
+  private async tryLoadFlowDefinition(
+    flowName: string
+  ): Promise<{ flowName: string; nodes: DiscoverySnapshot["nodes"]; edges: DiscoverySnapshot["edges"] }> {
+    try {
+      return await this.loadFlow(flowName);
+    } catch {
+      const snapshot = await this.ensureSnapshot();
+      return {
+        flowName: sanitizeFlowName(flowName || "default"),
+        nodes: snapshot.nodes,
+        edges: snapshot.edges
+      };
+    }
+  }
+
+  private async resolveBackendForTask(
+    requestedBackendId: CliBackendId | undefined,
+    node: DiscoverySnapshot["nodes"][number] | undefined
+  ): Promise<CliBackend> {
+    const backends = await this.detectCliBackends();
+    const config = vscode.workspace.getConfiguration("agentCanvas");
+    let backendId = requestedBackendId;
+
+    if (!backendId || backendId === "auto") {
+      if (node?.type === "agent") {
+        const agent = this.snapshot?.agents.find((item) => item.id === node.id);
+        if (agent?.runtime?.kind === "cli") {
+          backendId = agent.runtime.backendId;
+        } else if (agent?.runtime?.kind === "openclaw") {
+          return {
+            id: "custom",
+            displayName: "OpenClaw CLI",
+            command: "openclaw",
+            args: ["agent", "--message"],
+            available: true,
+            stdinPrompt: false
+          };
+        }
+      }
+      if (!backendId || backendId === "auto") {
+        backendId = config.get<CliBackendId>("promptBackend", "auto");
+      }
+    }
+
+    return pickPromptBackend(backends, backendId ?? "auto");
+  }
+
+  private async setAgentRuntime(agentId: string, runtime: AgentProfile["runtime"] | null): Promise<void> {
+    const agent = this.requireAgent(agentId);
+    await applyAgentProfilePatch({
+      workspaceRoot: this.getWorkspaceRoot(),
+      baseProfile: agent,
+      patch: {
+        runtime
+      }
+    });
+  }
+
+  private async setBackendOverrides(overrides: CliBackendOverrides): Promise<void> {
+    const config = vscode.workspace.getConfiguration("agentCanvas");
+    await config.update("cliBackendOverrides", overrides, vscode.ConfigurationTarget.Workspace);
+  }
+
   private async ensureSnapshot(): Promise<DiscoverySnapshot> {
     if (this.snapshot) {
       return this.snapshot;
@@ -1243,7 +2147,8 @@ class AgentCanvasPanel {
     const config = vscode.workspace.getConfiguration("agentCanvas");
     return await detectAllCliBackends({
       customCliCommand: config.get<string>("customCliCommand", ""),
-      customCliArgs: config.get<string[]>("customCliArgs", [])
+      customCliArgs: config.get<string[]>("customCliArgs", []),
+      backendOverrides: config.get<CliBackendOverrides>("cliBackendOverrides", {})
     });
   }
 
@@ -1573,4 +2478,12 @@ function resolveMcpServerId(
   const normalized = normalizeLabel(requested);
   const byName = servers.find((server) => normalizeLabel(server.name) === normalized);
   return byName?.id;
+}
+
+function sanitizeRunNodeId(nodeId: string): string {
+  return nodeId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }

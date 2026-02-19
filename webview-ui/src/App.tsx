@@ -1,18 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Edge, Node } from "reactflow";
 import GraphView from "./canvas/GraphView";
+import ScheduleView from "./canvas/ScheduleView";
 import { onExtensionMessage, postToExtension, requestToExtension } from "./messaging/vscodeBridge";
 import type {
+  AgentRuntime,
   AgentRole,
   CliBackend,
+  CliBackendOverrides,
   DiscoverySnapshot,
   ExtensionToWebviewMessage,
   GeneratedAgentStructure,
   Position,
   PromptHistoryEntry,
+  RunEvent,
+  RunSummary,
   StudioEdge,
   StudioNode,
-  SkillPackPreview
+  SkillPackPreview,
+  Task,
+  TaskEvent
 } from "./messaging/protocol";
 import type { PatternIndexItem, PatternTemplate } from "./patterns/types";
 import AgentDetailModal from "./panels/AgentDetailModal";
@@ -31,7 +38,8 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<DiscoverySnapshot>();
   const [selectedNode, setSelectedNode] = useState<Node>();
   const [selectedEdge, setSelectedEdge] = useState<Edge>();
-  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "prompt">("library");
+  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "prompt" | "run">("library");
+  const [canvasMode, setCanvasMode] = useState<"graph" | "schedule">("graph");
   const [panelOpen, setPanelOpen] = useState(true);
   const [hiddenNodeIds, setHiddenNodeIds] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ level: "info" | "warning" | "error"; message: string }>();
@@ -63,9 +71,88 @@ export default function App() {
   const [patternNodes, setPatternNodes] = useState<StudioNode[]>([]);
   const [patternEdges, setPatternEdges] = useState<StudioEdge[]>([]);
   const [activeFlowName, setActiveFlowName] = useState("default");
+  const [runHistory, setRunHistory] = useState<RunSummary[]>([]);
+  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string>();
+  const [activeRunId, setActiveRunId] = useState<string>();
+  const [scheduleRunId, setScheduleRunId] = useState<string>();
+  const [scheduleTasks, setScheduleTasks] = useState<Task[]>([]);
+  const [selectedScheduleTaskId, setSelectedScheduleTaskId] = useState<string>();
+  const [scheduleNowMs, setScheduleNowMs] = useState(0);
+  const scheduleOriginNowRef = useRef(0);
+  const scheduleRunIdRef = useRef<string>();
+
+  useEffect(() => {
+    scheduleRunIdRef.current = scheduleRunId;
+  }, [scheduleRunId]);
+
+  const applyScheduleEvent = (event: TaskEvent) => {
+    const currentRunId = scheduleRunIdRef.current;
+    if (currentRunId && currentRunId !== event.runId && event.type !== "snapshot") {
+      return;
+    }
+
+    if (!currentRunId || currentRunId !== event.runId) {
+      setScheduleRunId(event.runId);
+      scheduleRunIdRef.current = event.runId;
+      scheduleOriginNowRef.current = event.nowMs;
+      setScheduleNowMs(0);
+    } else {
+      setScheduleNowMs(Math.max(0, event.nowMs - scheduleOriginNowRef.current));
+    }
+
+    if (event.type === "snapshot") {
+      setScheduleTasks(event.tasks);
+      return;
+    }
+
+    if (event.type === "task_created") {
+      setScheduleTasks((prev) => {
+        const next = prev.filter((task) => task.id !== event.task.id);
+        next.push(event.task);
+        return next;
+      });
+      return;
+    }
+
+    if (event.type === "task_updated") {
+      setScheduleTasks((prev) =>
+        prev.map((task) =>
+          task.id === event.taskId
+            ? {
+              ...task,
+              ...event.patch,
+              overrides: event.patch.overrides
+                ? {
+                    ...(task.overrides ?? {}),
+                    ...event.patch.overrides
+                  }
+                : task.overrides,
+              meta: event.patch.meta
+                ? {
+                    ...(task.meta ?? {}),
+                    ...event.patch.meta
+                  }
+                : task.meta
+            }
+            : task
+        )
+      );
+      return;
+    }
+
+    if (event.type === "task_deleted") {
+      setScheduleTasks((prev) => prev.filter((task) => task.id !== event.taskId));
+      setSelectedScheduleTaskId((current) => (current === event.taskId ? undefined : current));
+    }
+  };
 
   useEffect(() => {
     const dispose = onExtensionMessage((message) => {
+      if (message.type === "SCHEDULE_EVENT") {
+        applyScheduleEvent(message.payload.event);
+        return;
+      }
       handleExtensionMessage(message, {
         setSnapshot,
         setToast,
@@ -82,7 +169,14 @@ export default function App() {
     postToExtension({ type: "READY" });
     void requestToExtension({ type: "DETECT_CLI_BACKENDS" }).catch(showErrorToast);
     void requestToExtension({ type: "GET_PROMPT_HISTORY" }).catch(showErrorToast);
+    void requestToExtension<{ runs: RunSummary[] }>({
+      type: "LIST_RUNS",
+      payload: { flowName: activeFlowName }
+    })
+      .then((result) => setRunHistory(result.runs ?? []))
+      .catch(showErrorToast);
     return dispose;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -112,6 +206,16 @@ export default function App() {
       .then((items) => setInteractionPatterns(items))
       .catch(showErrorToast);
   }, []);
+
+  useEffect(() => {
+    if (!scheduleRunId) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setScheduleNowMs((prev) => prev + 250);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [scheduleRunId]);
 
   const generatedAtText = useMemo(() => {
     if (!snapshot?.generatedAt) {
@@ -164,6 +268,11 @@ export default function App() {
       warnings
     };
   }, [snapshot?.ruleDocs.length, snapshot?.skills]);
+
+  const selectedScheduleTask = useMemo(
+    () => scheduleTasks.find((task) => task.id === selectedScheduleTaskId),
+    [scheduleTasks, selectedScheduleTaskId]
+  );
 
   const skillBaseOptions = useMemo(() => {
     const workspaceRoot = snapshot?.agent.workspaceRoot;
@@ -435,6 +544,13 @@ export default function App() {
     postToExtension({
       type: "UPDATE_AGENT_PROFILE",
       payload
+    });
+  };
+
+  const setAgentRuntime = (agentId: string, runtime: AgentRuntime | null) => {
+    postToExtension({
+      type: "SET_AGENT_RUNTIME",
+      payload: { agentId, runtime }
     });
   };
 
@@ -799,6 +915,189 @@ export default function App() {
     }
   };
 
+  const subscribeScheduleRun = async (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    if (scheduleRunId && scheduleRunId !== runId) {
+      postToExtension({
+        type: "SCHEDULE_UNSUBSCRIBE",
+        payload: { runId: scheduleRunId }
+      });
+    }
+    await requestToExtension({
+      type: "SCHEDULE_SUBSCRIBE",
+      payload: { runId }
+    });
+    const snapshotResult = await requestToExtension<{ event: TaskEvent }>({
+      type: "SCHEDULE_GET_SNAPSHOT",
+      payload: { runId }
+    });
+    if (snapshotResult.event) {
+      applyScheduleEvent(snapshotResult.event);
+    }
+  };
+
+  const refreshRunHistory = async () => {
+    const result = await requestToExtension<{ runs: RunSummary[] }>({
+      type: "LIST_RUNS",
+      payload: { flowName: activeFlowName }
+    });
+    setRunHistory(result.runs ?? []);
+  };
+
+  useEffect(() => {
+    void refreshRunHistory().catch(showErrorToast);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFlowName]);
+
+  const runFlowFromPanel = async (payload: {
+    flowName: string;
+    backendId: CliBackend["id"];
+    usePinnedOutputs: boolean;
+  }) => {
+    setBusy(true);
+    try {
+      const result = await requestToExtension<{
+        runId: string;
+        flowName: string;
+        taskCount: number;
+      }>({
+        type: "RUN_FLOW",
+        payload: {
+          flowName: payload.flowName,
+          backendId: payload.backendId,
+          usePinnedOutputs: payload.usePinnedOutputs
+        }
+      });
+      setActiveRunId(result.runId);
+      setSelectedRunId(result.runId);
+      setCanvasMode("schedule");
+      setPanelMode("run");
+      setPanelOpen(true);
+      await subscribeScheduleRun(result.runId);
+      await refreshRunHistory();
+    } catch (error) {
+      showErrorToast(error);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runNodeFromPanel = async (payload: {
+    flowName: string;
+    nodeId: string;
+    backendId: CliBackend["id"];
+    usePinnedOutput: boolean;
+  }) => {
+    setBusy(true);
+    try {
+      const result = await requestToExtension<{
+        runId: string;
+        flowName: string;
+        nodeId: string;
+      }>({
+        type: "RUN_NODE",
+        payload
+      });
+      setActiveRunId(result.runId);
+      setSelectedRunId(result.runId);
+      setCanvasMode("schedule");
+      setPanelMode("run");
+      setPanelOpen(true);
+      await subscribeScheduleRun(result.runId);
+      await refreshRunHistory();
+    } catch (error) {
+      showErrorToast(error);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopRunFromPanel = async (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    await requestToExtension({
+      type: "STOP_RUN",
+      payload: { runId }
+    });
+    await refreshRunHistory();
+    setActiveRunId((current) => (current === runId ? undefined : current));
+  };
+
+  const selectRun = async (runId: string) => {
+    setSelectedRunId(runId);
+    const selectedRun = runHistory.find((run) => run.runId === runId);
+    const flowName = selectedRun?.flow ?? activeFlowName;
+    await subscribeScheduleRun(runId);
+    const loaded = await requestToExtension<{ events: RunEvent[] }>({
+      type: "LOAD_RUN",
+      payload: {
+        flowName,
+        runId
+      }
+    });
+    setRunEvents(loaded.events ?? []);
+    setCanvasMode("schedule");
+  };
+
+  const pinOutput = async (flowName: string, nodeId: string, output: unknown) => {
+    await requestToExtension({
+      type: "PIN_OUTPUT",
+      payload: { flowName, nodeId, output }
+    });
+    setToast({ level: "info", message: `Pinned output for ${nodeId}` });
+  };
+
+  const unpinOutput = async (flowName: string, nodeId: string) => {
+    await requestToExtension({
+      type: "UNPIN_OUTPUT",
+      payload: { flowName, nodeId }
+    });
+    setToast({ level: "info", message: `Unpinned output for ${nodeId}` });
+  };
+
+  const setBackendOverrides = async (overrides: CliBackendOverrides) => {
+    await requestToExtension({
+      type: "SET_BACKEND_OVERRIDES",
+      payload: { overrides }
+    });
+    await requestToExtension({ type: "DETECT_CLI_BACKENDS" });
+    setToast({ level: "info", message: "Backend overrides updated" });
+  };
+
+  const moveScheduleTask = (taskId: string, forceStartMs: number, forceAgentId?: string) => {
+    if (!scheduleRunId) {
+      return;
+    }
+    postToExtension({
+      type: "TASK_MOVE",
+      payload: {
+        runId: scheduleRunId,
+        taskId,
+        forceStartMs,
+        forceAgentId
+      }
+    });
+  };
+
+  const pinScheduleTask = (taskId: string, pinned: boolean) => {
+    if (!scheduleRunId) {
+      return;
+    }
+    postToExtension({
+      type: "TASK_PIN",
+      payload: {
+        runId: scheduleRunId,
+        taskId,
+        pinned
+      }
+    });
+  };
+
   const commandItems = [
     {
       id: "refresh",
@@ -842,6 +1141,15 @@ export default function App() {
       subtitle: "Generate agent team from natural language",
       run: () => {
         setPanelMode("prompt");
+        setPanelOpen(true);
+      }
+    },
+    {
+      id: "run-panel",
+      title: "Open run panel",
+      subtitle: "Execute flow and inspect run history",
+      run: () => {
+        setPanelMode("run");
         setPanelOpen(true);
       }
     },
@@ -932,6 +1240,29 @@ export default function App() {
             <button title="Save interaction flow" onClick={() => void saveFlow()}>Save Flow</button>
             <button title="Load interaction flow" onClick={() => void loadFlow()}>Load Flow</button>
             <button title="Refresh discovery (R)" onClick={refreshDiscovery}>Refresh</button>
+            <button
+              title="Run panel"
+              onClick={() => {
+                setPanelMode("run");
+                setPanelOpen(true);
+              }}
+            >
+              Run
+            </button>
+            <button
+              className={canvasMode === "graph" ? "active-toggle" : ""}
+              onClick={() => setCanvasMode("graph")}
+              title="Graph canvas"
+            >
+              Graph
+            </button>
+            <button
+              className={canvasMode === "schedule" ? "active-toggle" : ""}
+              onClick={() => setCanvasMode("schedule")}
+              title="Schedule canvas"
+            >
+              Schedule
+            </button>
             <button title="Export all skills" onClick={() => exportSkills([])}>Export Pack</button>
             <button title="Import skill pack" onClick={requestImportPreview}>Import Pack</button>
             <button title="Validate all skills" onClick={runValidationAll}>Validate</button>
@@ -956,63 +1287,86 @@ export default function App() {
         </header>
 
         <div className="workspace-body">
-          <GraphView
-            snapshot={composedSnapshot}
-            hiddenNodeIds={hiddenNodeIds}
-            onSelectNode={(node) => {
-              setSelectedNode(node);
-              setSelectedEdge(undefined);
-              if (node) {
-                setPanelMode("inspector");
+          {canvasMode === "graph" && (
+            <GraphView
+              snapshot={composedSnapshot}
+              hiddenNodeIds={hiddenNodeIds}
+              onSelectNode={(node) => {
+                setSelectedNode(node);
+                setSelectedEdge(undefined);
+                if (node) {
+                  setPanelMode("inspector");
+                  setPanelOpen(true);
+                }
+              }}
+              onSelectEdge={(edge) => {
+                setSelectedEdge(edge);
+                setSelectedNode(undefined);
+                if (edge) {
+                  setPanelMode("inspector");
+                  setPanelOpen(true);
+                }
+              }}
+              onOpenFile={openFile}
+              onCreateOverride={createOverride}
+              onToggleSkill={toggleSkillEnabled}
+              onHideNode={hideNode}
+              onRevealPath={revealPath}
+              onExportSkill={(skillId) => exportSkills([skillId])}
+              onToggleLibrary={() => {
+                setPanelMode("library");
                 setPanelOpen(true);
+              }}
+              onAddCommonRule={() => setCommonRuleModalOpen(true)}
+              onToggleCommandBar={() => setCommandBarOpen((open) => !open)}
+              onCreateNote={addNote}
+              onSaveNote={saveNote}
+              onDeleteNote={deleteNote}
+              onDuplicateNote={(text, position) => addNote(position, text)}
+              onScanWorkspace={refreshDiscovery}
+              onImportPack={requestImportPreview}
+              onEnsureRootAgents={ensureRootAgents}
+              onOpenCommonRulesFolder={openCommonRulesFolder}
+              onCreateCommonRuleDocs={createCommonRuleDocs}
+              onAddAgentLink={addAgentLink}
+              onOpenAgentDetail={(agentId, agentName) =>
+                setAgentDetailModal({ agentId, agentName })
               }
-            }}
-            onSelectEdge={(edge) => {
-              setSelectedEdge(edge);
-              setSelectedNode(undefined);
-              if (edge) {
-                setPanelMode("inspector");
+              onAssignSkillToAgent={assignSkillToAgent}
+              onAssignMcpToAgent={assignMcpToAgent}
+              onDropPattern={(patternId, position) => {
+                void insertInteractionPattern(patternId, position).catch(() => undefined);
+              }}
+              onSaveNodePosition={saveNodePosition}
+            />
+          )}
+
+          {canvasMode === "schedule" && (
+            <ScheduleView
+              runId={scheduleRunId}
+              tasks={scheduleTasks}
+              agents={snapshot?.agents ?? []}
+              nowMs={scheduleNowMs}
+              selectedTaskId={selectedScheduleTaskId}
+              onSelectTask={(taskId) => {
+                setSelectedScheduleTaskId(taskId);
+                if (!taskId) {
+                  return;
+                }
+                setPanelMode("run");
                 setPanelOpen(true);
-              }
-            }}
-            onOpenFile={openFile}
-            onCreateOverride={createOverride}
-            onToggleSkill={toggleSkillEnabled}
-            onHideNode={hideNode}
-            onRevealPath={revealPath}
-            onExportSkill={(skillId) => exportSkills([skillId])}
-            onToggleLibrary={() => {
-              setPanelMode("library");
-              setPanelOpen(true);
-            }}
-            onAddCommonRule={() => setCommonRuleModalOpen(true)}
-            onToggleCommandBar={() => setCommandBarOpen((open) => !open)}
-            onCreateNote={addNote}
-            onSaveNote={saveNote}
-            onDeleteNote={deleteNote}
-            onDuplicateNote={(text, position) => addNote(position, text)}
-            onScanWorkspace={refreshDiscovery}
-            onImportPack={requestImportPreview}
-            onEnsureRootAgents={ensureRootAgents}
-            onOpenCommonRulesFolder={openCommonRulesFolder}
-            onCreateCommonRuleDocs={createCommonRuleDocs}
-            onAddAgentLink={addAgentLink}
-            onOpenAgentDetail={(agentId, agentName) =>
-              setAgentDetailModal({ agentId, agentName })
-            }
-            onAssignSkillToAgent={assignSkillToAgent}
-            onAssignMcpToAgent={assignMcpToAgent}
-            onDropPattern={(patternId, position) => {
-              void insertInteractionPattern(patternId, position).catch(() => undefined);
-            }}
-            onSaveNodePosition={saveNodePosition}
-          />
+              }}
+              onMoveTask={moveScheduleTask}
+              onPinTask={pinScheduleTask}
+            />
+          )}
 
           <RightPanel
             mode={panelMode}
             open={panelOpen}
             snapshot={composedSnapshot}
-            selectedNode={selectedNode}
+            selectedNode={canvasMode === "graph" ? selectedNode : undefined}
+            selectedScheduleTaskId={selectedScheduleTaskId}
             selectedEdge={selectedEdge}
             onModeChange={setPanelMode}
             onOpenFile={openFile}
@@ -1033,6 +1387,21 @@ export default function App() {
             interactionPatterns={interactionPatterns}
             onInsertPattern={insertInteractionPattern}
             onUpdateInteractionEdge={updateInteractionEdge}
+            activeFlowName={activeFlowName}
+            runBackends={promptBackends}
+            runHistory={runHistory}
+            runEvents={runEvents}
+            activeRunId={activeRunId}
+            selectedRunId={selectedRunId}
+            selectedScheduleTask={selectedScheduleTask}
+            onRunFlow={runFlowFromPanel}
+            onRunNode={runNodeFromPanel}
+            onStopRun={stopRunFromPanel}
+            onRefreshRunHistory={refreshRunHistory}
+            onSelectRun={selectRun}
+            onPinOutput={pinOutput}
+            onUnpinOutput={unpinOutput}
+            onSetBackendOverrides={setBackendOverrides}
           />
         </div>
 
@@ -1042,6 +1411,8 @@ export default function App() {
           <span>Errors {summary.errors}</span>
           <span>Warnings {summary.warnings}</span>
           <span>Flow {activeFlowName}</span>
+          <span>Canvas {canvasMode}</span>
+          <span>Run {activeRunId ?? "-"}</span>
           <span>Focus Canvas</span>
         </div>
       </section>
@@ -1100,6 +1471,7 @@ export default function App() {
         onCreateOverride={createOverride}
         onExportSkill={(skillId) => exportSkills([skillId])}
         onUpdateProfile={updateAgentProfile}
+        onSetRuntime={setAgentRuntime}
         onSetDelegation={setAgentDelegation}
         onAssignSkill={assignSkillToAgent}
         onUnassignSkill={unassignSkillFromAgent}
@@ -1176,6 +1548,9 @@ function handleExtensionMessage(
     }
     case "PROMPT_HISTORY": {
       handlers.setPromptHistory(message.payload.items);
+      return;
+    }
+    case "SCHEDULE_EVENT": {
       return;
     }
     case "GENERATION_PROGRESS": {

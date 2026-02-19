@@ -332,6 +332,7 @@ async function buildGraph(input: {
         delegatesTo: agent.delegatesTo ?? [],
         assignedSkillIds: agent.assignedSkillIds ?? [],
         assignedMcpServerIds: agent.assignedMcpServerIds ?? [],
+        runtime: agent.runtime,
         color: agent.color,
         avatar: agent.avatar || initialsForAgent(agent.name),
         skillCount,
