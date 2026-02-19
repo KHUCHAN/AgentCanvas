@@ -23,6 +23,8 @@ async function run() {
     test('Flow store save/load/list roundtrip', testFlowStoreRoundtrip),
     test('Interaction log is appended to JSONL', testInteractionLogRoundtrip),
     test('Schedule service computes plan and patches updates', testScheduleServiceRoundtrip),
+    test('Schedule service blocks cyclic/missing dependencies', testScheduleServiceBlocking),
+    test('Schedule service patchTask deep-merges nested fields', testScheduleServiceDeepPatch),
     test('Run store persists summary and events', testRunStoreRoundtrip),
     test('Pin store set/get/clear roundtrip', testPinStoreRoundtrip)
   ];
@@ -352,6 +354,98 @@ async function testScheduleServiceRoundtrip() {
 
   assert.ok(events.length > 0, 'expected schedule events to be emitted');
   unsubscribe();
+}
+
+async function testScheduleServiceBlocking() {
+  const { ScheduleService } = require(path.join(root, 'extension', 'dist', 'schedule', 'scheduleService.js'));
+  const service = new ScheduleService({ defaultEstimateMs: 60000 });
+  const runId = 'run_schedule_blocking_test';
+  const now = Date.now();
+  service.createRun(runId, [
+    {
+      id: 'task:cycle:a',
+      title: 'Cycle A',
+      agentId: 'agent:1',
+      deps: ['task:cycle:b'],
+      status: 'planned',
+      createdAtMs: now,
+      updatedAtMs: now
+    },
+    {
+      id: 'task:cycle:b',
+      title: 'Cycle B',
+      agentId: 'agent:1',
+      deps: ['task:cycle:a'],
+      status: 'planned',
+      createdAtMs: now + 1,
+      updatedAtMs: now + 1
+    },
+    {
+      id: 'task:missing',
+      title: 'Missing dependency',
+      agentId: 'agent:2',
+      deps: ['task:not-found'],
+      status: 'planned',
+      createdAtMs: now + 2,
+      updatedAtMs: now + 2
+    }
+  ]);
+
+  const tasks = service.getTasks(runId);
+  const cycleA = tasks.find((task) => task.id === 'task:cycle:a');
+  const cycleB = tasks.find((task) => task.id === 'task:cycle:b');
+  const missing = tasks.find((task) => task.id === 'task:missing');
+
+  assert.equal(cycleA?.status, 'blocked');
+  assert.equal(cycleB?.status, 'blocked');
+  assert.equal(missing?.status, 'blocked');
+  assert.ok((missing?.blocker?.message || '').includes('task:not-found'));
+}
+
+async function testScheduleServiceDeepPatch() {
+  const { ScheduleService } = require(path.join(root, 'extension', 'dist', 'schedule', 'scheduleService.js'));
+  const service = new ScheduleService({ defaultEstimateMs: 60000 });
+  const runId = 'run_schedule_patch_test';
+  const now = Date.now();
+  service.createRun(runId, [
+    {
+      id: 'task:patch',
+      title: 'Patch target',
+      agentId: 'agent:1',
+      deps: [],
+      status: 'planned',
+      overrides: {
+        pinned: true,
+        priority: 3
+      },
+      meta: {
+        customData: {
+          keep: true,
+          replace: 'before'
+        }
+      },
+      createdAtMs: now,
+      updatedAtMs: now
+    }
+  ]);
+
+  service.patchTask(runId, 'task:patch', {
+    overrides: {
+      forceStartMs: 123
+    },
+    meta: {
+      customData: {
+        replace: 'after'
+      }
+    }
+  });
+
+  const updated = service.getTasks(runId).find((task) => task.id === 'task:patch');
+  assert.equal(updated?.overrides?.pinned, true);
+  assert.equal(updated?.overrides?.priority, 3);
+  assert.equal(updated?.overrides?.forceStartMs, 123);
+  assert.equal(updated?.meta?.customData?.keep, true);
+  assert.equal(updated?.meta?.customData?.replace, 'after');
 }
 
 async function testRunStoreRoundtrip() {

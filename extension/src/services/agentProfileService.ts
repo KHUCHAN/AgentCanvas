@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentProfile, AgentRole, AgentRuntime } from "../types";
+import { sanitizeFileName } from "./pathUtils";
 
 const AGENT_PROFILES_DIR = join(".agentcanvas", "agents");
 
@@ -28,13 +29,6 @@ function profileDir(workspaceRoot: string): string {
 
 function profileFilePath(workspaceRoot: string, agentId: string): string {
   return join(profileDir(workspaceRoot), `${sanitizeFileName(agentId)}.json`);
-}
-
-function sanitizeFileName(value: string): string {
-  // Note: This replaces all non-safe chars with '_'. In practice, custom agent IDs
-  // follow the pattern "custom:[a-z0-9-]+" so the only replaced char is ':'.
-  // Collision risk is negligible since slugify() ensures unique base names.
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
 function slugify(value: string): string {

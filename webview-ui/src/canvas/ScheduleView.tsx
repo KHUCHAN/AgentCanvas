@@ -7,8 +7,7 @@ import ReactFlow, {
   Node,
   NodeProps,
   NodeTypes,
-  ReactFlowProvider,
-  useViewport
+  ReactFlowProvider
 } from "reactflow";
 import "reactflow/dist/style.css";
 import type { AgentProfile, Task } from "../messaging/protocol";
@@ -27,11 +26,16 @@ type ScheduleViewProps = {
 const LANE_HEIGHT = 92;
 const TASK_HEIGHT = 46;
 const TASK_OFFSET_Y = 24;
-const PX_PER_SEC = 4;
+const MIN_TIMELINE_WIDTH = 2200;
+const TIMELINE_PADDING_MS = 300_000;
+const TIMELINE_TARGET_WIDTH = 2400;
+const MIN_PX_PER_SEC = 0.75;
+const MAX_PX_PER_SEC = 2.4;
 
 const nodeTypes: NodeTypes = {
   scheduleLane: ScheduleLaneNode,
-  scheduleTask: ScheduleTaskNode
+  scheduleTask: ScheduleTaskNode,
+  scheduleNow: ScheduleNowNode
 };
 
 export default function ScheduleView(props: ScheduleViewProps) {
@@ -75,7 +79,12 @@ function ScheduleCanvas(props: ScheduleViewProps) {
     return max;
   }, [props.tasks]);
 
-  const timelineWidth = Math.max(2200, timeToX(maxEndMs + 300_000));
+  const pxPerSec = useMemo(() => {
+    const horizonSeconds = Math.max(300, (maxEndMs + TIMELINE_PADDING_MS) / 1000);
+    return clampNumber(TIMELINE_TARGET_WIDTH / horizonSeconds, MIN_PX_PER_SEC, MAX_PX_PER_SEC);
+  }, [maxEndMs]);
+
+  const timelineWidth = Math.max(MIN_TIMELINE_WIDTH, timeToX(maxEndMs + TIMELINE_PADDING_MS, pxPerSec));
 
   const nodes = useMemo<Node[]>(() => {
     const laneNodes: Node[] = laneOrder.map((agentId, index) => {
@@ -100,11 +109,11 @@ function ScheduleCanvas(props: ScheduleViewProps) {
       const lane = laneIndex.get(task.agentId) ?? 0;
       const startMs = task.plannedStartMs ?? 0;
       const endMs = task.plannedEndMs ?? startMs + (task.estimateMs ?? 120_000);
-      const width = durationToW(endMs - startMs);
+      const width = durationToW(endMs - startMs, pxPerSec);
       return {
         id: task.id,
         type: "scheduleTask",
-        position: { x: timeToX(startMs), y: lane * LANE_HEIGHT + TASK_OFFSET_Y },
+        position: { x: timeToX(startMs, pxPerSec), y: lane * LANE_HEIGHT + TASK_OFFSET_Y },
         draggable: true,
         selectable: true,
         data: {
@@ -117,8 +126,38 @@ function ScheduleCanvas(props: ScheduleViewProps) {
         }
       };
     });
-    return [...laneNodes, ...taskNodes];
-  }, [laneIndex, laneOrder, props.agents, props.selectedTaskId, props.tasks, timelineWidth]);
+
+    const nowHeight = Math.max(360, laneOrder.length * LANE_HEIGHT);
+    const nowLineNode: Node = {
+      id: `now:${props.runId ?? "run"}`,
+      type: "scheduleNow",
+      position: { x: timeToX(props.nowMs, pxPerSec), y: 0 },
+      draggable: false,
+      selectable: false,
+      connectable: false,
+      zIndex: 20,
+      data: {
+        height: nowHeight
+      },
+      style: {
+        pointerEvents: "none",
+        width: 2,
+        height: nowHeight
+      }
+    };
+
+    return [...laneNodes, ...taskNodes, nowLineNode];
+  }, [
+    laneIndex,
+    laneOrder,
+    props.agents,
+    props.nowMs,
+    props.runId,
+    props.selectedTaskId,
+    props.tasks,
+    pxPerSec,
+    timelineWidth
+  ]);
 
   const edges = useMemo<Edge[]>(() => {
     const result: Edge[] = [];
@@ -199,11 +238,10 @@ function ScheduleCanvas(props: ScheduleViewProps) {
             Math.max(0, laneOrder.length - 1)
           );
           const forceAgentId = laneOrder[lane];
-          props.onMoveTask(node.id, Math.max(0, xToTime(node.position.x)), forceAgentId);
+          props.onMoveTask(node.id, Math.max(0, xToTime(node.position.x, pxPerSec)), forceAgentId);
         }}
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1.05} color="#9cb0a9" />
-        <NowLine nowMs={props.nowMs} />
       </ReactFlow>
     </div>
   );
@@ -244,26 +282,26 @@ function ScheduleTaskNode(
   );
 }
 
-function NowLine(props: { nowMs: number }) {
-  const viewport = useViewport();
-  const worldX = timeToX(props.nowMs);
-  const screenX = worldX * viewport.zoom + viewport.x;
-
-  return <div className="schedule-now-line" style={{ left: screenX }} />;
+function ScheduleNowNode(props: NodeProps<{ height: number }>) {
+  return <div className="schedule-now-line" style={{ height: props.data.height }} />;
 }
 
-function timeToX(ms: number): number {
-  return (ms / 1000) * PX_PER_SEC;
+function timeToX(ms: number, pxPerSec: number): number {
+  return (ms / 1000) * pxPerSec;
 }
 
-function xToTime(x: number): number {
-  return (x / PX_PER_SEC) * 1000;
+function xToTime(x: number, pxPerSec: number): number {
+  return (x / pxPerSec) * 1000;
 }
 
-function durationToW(ms: number): number {
-  return Math.max(44, (ms / 1000) * PX_PER_SEC);
+function durationToW(ms: number, pxPerSec: number): number {
+  return Math.max(44, (ms / 1000) * pxPerSec);
 }
 
 function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }

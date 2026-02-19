@@ -66,15 +66,22 @@ export async function appendRunEvent(input: {
   event: RunEvent;
 }): Promise<string> {
   const flow = sanitizeFlowName(input.flowName || "default");
-  const dir = runsDir(input.workspaceRoot, flow);
-  await mkdir(dir, { recursive: true });
   const filePath = runFilePath(input.workspaceRoot, flow, input.event.runId);
   const event: RunEvent = {
     ...input.event,
     flow,
     ts: input.event.ts || Date.now()
   };
-  await appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
+  const line = `${JSON.stringify(event)}\n`;
+  try {
+    await appendFile(filePath, line, "utf8");
+  } catch (error) {
+    if (!isFsErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+    await mkdir(runsDir(input.workspaceRoot, flow), { recursive: true });
+    await appendFile(filePath, line, "utf8");
+  }
   return filePath;
 }
 
@@ -130,11 +137,8 @@ export async function listRuns(input: {
     return [];
   }
 
-  const all: RunSummary[] = [];
-  for (const flow of flowEntries) {
-    const runs = await readRunIndex(input.workspaceRoot, flow);
-    all.push(...runs);
-  }
+  const runLists = await Promise.all(flowEntries.map((flow) => readRunIndex(input.workspaceRoot, flow)));
+  const all = runLists.flat();
 
   return all.sort((left, right) => right.startedAt - left.startedAt).slice(0, limit);
 }
@@ -211,4 +215,14 @@ async function writeRunIndex(
   await mkdir(dir, { recursive: true });
   const path = indexFilePath(workspaceRoot, flowName);
   await writeFile(path, `${JSON.stringify(summaries, null, 2)}\n`, "utf8");
+}
+
+function isFsErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    (error as { code: string }).code === code
+  );
 }

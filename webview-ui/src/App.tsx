@@ -34,6 +34,14 @@ import RightPanel from "./panels/RightPanel";
 import SkillWizardModal from "./panels/SkillWizardModal";
 import { getValidationCounts } from "./utils/validation";
 
+type ScheduleRunState = {
+  tasks: Task[];
+  originNowMs: number;
+  nowMs: number;
+  anchorNowMs: number;
+  anchorWallMs: number;
+};
+
 export default function App() {
   const [snapshot, setSnapshot] = useState<DiscoverySnapshot>();
   const [selectedNode, setSelectedNode] = useState<Node>();
@@ -80,69 +88,46 @@ export default function App() {
   const [selectedScheduleTaskId, setSelectedScheduleTaskId] = useState<string>();
   const [scheduleNowMs, setScheduleNowMs] = useState(0);
   const scheduleOriginNowRef = useRef(0);
+  const scheduleAnchorNowRef = useRef(0);
+  const scheduleAnchorWallMsRef = useRef(Date.now());
   const scheduleRunIdRef = useRef<string>();
+  const scheduleRunStateRef = useRef<Map<string, ScheduleRunState>>(new Map());
 
   useEffect(() => {
     scheduleRunIdRef.current = scheduleRunId;
   }, [scheduleRunId]);
 
   const applyScheduleEvent = (event: TaskEvent) => {
+    const cache = scheduleRunStateRef.current;
+    const previous = cache.get(event.runId);
+    const originNowMs = previous?.originNowMs ?? event.nowMs;
+    const tasks = applyTaskEvent(previous?.tasks ?? [], event);
+    const nowMs = Math.max(0, event.nowMs - originNowMs);
+    const anchorWallMs = Date.now();
+    const nextState: ScheduleRunState = {
+      tasks,
+      originNowMs,
+      nowMs,
+      anchorNowMs: nowMs,
+      anchorWallMs
+    };
+    cache.set(event.runId, nextState);
+
     const currentRunId = scheduleRunIdRef.current;
-    if (currentRunId && currentRunId !== event.runId && event.type !== "snapshot") {
-      return;
-    }
-
-    if (!currentRunId || currentRunId !== event.runId) {
-      setScheduleRunId(event.runId);
+    if (!currentRunId) {
       scheduleRunIdRef.current = event.runId;
-      scheduleOriginNowRef.current = event.nowMs;
-      setScheduleNowMs(0);
-    } else {
-      setScheduleNowMs(Math.max(0, event.nowMs - scheduleOriginNowRef.current));
+      setScheduleRunId(event.runId);
     }
-
-    if (event.type === "snapshot") {
-      setScheduleTasks(event.tasks);
+    if ((scheduleRunIdRef.current ?? event.runId) !== event.runId) {
       return;
     }
 
-    if (event.type === "task_created") {
-      setScheduleTasks((prev) => {
-        const next = prev.filter((task) => task.id !== event.task.id);
-        next.push(event.task);
-        return next;
-      });
-      return;
-    }
-
-    if (event.type === "task_updated") {
-      setScheduleTasks((prev) =>
-        prev.map((task) =>
-          task.id === event.taskId
-            ? {
-              ...task,
-              ...event.patch,
-              overrides: event.patch.overrides
-                ? {
-                    ...(task.overrides ?? {}),
-                    ...event.patch.overrides
-                  }
-                : task.overrides,
-              meta: event.patch.meta
-                ? {
-                    ...(task.meta ?? {}),
-                    ...event.patch.meta
-                  }
-                : task.meta
-            }
-            : task
-        )
-      );
-      return;
-    }
-
+    scheduleOriginNowRef.current = nextState.originNowMs;
+    scheduleAnchorNowRef.current = nextState.anchorNowMs;
+    scheduleAnchorWallMsRef.current = nextState.anchorWallMs;
+    setScheduleNowMs(nextState.nowMs);
+    setScheduleTasks(nextState.tasks);
     if (event.type === "task_deleted") {
-      setScheduleTasks((prev) => prev.filter((task) => task.id !== event.taskId));
       setSelectedScheduleTaskId((current) => (current === event.taskId ? undefined : current));
     }
   };
@@ -211,10 +196,26 @@ export default function App() {
     if (!scheduleRunId) {
       return;
     }
-    const timer = window.setInterval(() => {
-      setScheduleNowMs((prev) => prev + 250);
-    }, 250);
-    return () => window.clearInterval(timer);
+    let canceled = false;
+    let timer = 0;
+    const tick = () => {
+      if (canceled) {
+        return;
+      }
+      const elapsedMs = Date.now() - scheduleAnchorWallMsRef.current;
+      const nextNowMs = Math.max(0, scheduleAnchorNowRef.current + elapsedMs);
+      setScheduleNowMs(nextNowMs);
+      const runState = scheduleRunStateRef.current.get(scheduleRunId);
+      if (runState) {
+        runState.nowMs = nextNowMs;
+      }
+      timer = window.setTimeout(tick, 250);
+    };
+    timer = window.setTimeout(tick, 250);
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
   }, [scheduleRunId]);
 
   const generatedAtText = useMemo(() => {
@@ -919,12 +920,29 @@ export default function App() {
     if (!runId) {
       return;
     }
-    if (scheduleRunId && scheduleRunId !== runId) {
+    const previousRunId = scheduleRunIdRef.current;
+    if (previousRunId && previousRunId !== runId) {
       postToExtension({
         type: "SCHEDULE_UNSUBSCRIBE",
-        payload: { runId: scheduleRunId }
+        payload: { runId: previousRunId }
       });
     }
+
+    scheduleRunIdRef.current = runId;
+    setScheduleRunId(runId);
+
+    const cached = scheduleRunStateRef.current.get(runId);
+    if (cached) {
+      scheduleOriginNowRef.current = cached.originNowMs;
+      scheduleAnchorNowRef.current = cached.anchorNowMs;
+      scheduleAnchorWallMsRef.current = cached.anchorWallMs;
+      setScheduleTasks(cached.tasks);
+      setScheduleNowMs(cached.nowMs);
+    } else {
+      setScheduleTasks([]);
+      setScheduleNowMs(0);
+    }
+
     await requestToExtension({
       type: "SCHEDULE_SUBSCRIBE",
       payload: { runId }
@@ -1503,6 +1521,53 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function applyTaskEvent(tasks: Task[], event: TaskEvent): Task[] {
+  if (event.type === "snapshot") {
+    return event.tasks;
+  }
+  if (event.type === "task_created") {
+    const next = tasks.filter((task) => task.id !== event.task.id);
+    next.push(event.task);
+    return next;
+  }
+  if (event.type === "task_updated") {
+    return tasks.map((task) => (task.id === event.taskId ? mergeTaskPatch(task, event.patch) : task));
+  }
+  if (event.type === "task_deleted") {
+    return tasks.filter((task) => task.id !== event.taskId);
+  }
+  return tasks;
+}
+
+function mergeTaskPatch(task: Task, patch: Partial<Task>): Task {
+  return {
+    ...task,
+    ...patch,
+    overrides: patch.overrides !== undefined ? mergeNestedRecord(task.overrides, patch.overrides) : task.overrides,
+    meta: patch.meta !== undefined ? mergeNestedRecord(task.meta, patch.meta) : task.meta
+  };
+}
+
+function mergeNestedRecord<T extends Record<string, unknown> | undefined>(base: T, patch: T): T {
+  if (!patch || !isPlainRecord(patch)) {
+    return patch;
+  }
+  const result: Record<string, unknown> = isPlainRecord(base) ? { ...base } : {};
+  for (const [key, patchValue] of Object.entries(patch)) {
+    const currentValue = result[key];
+    if (isPlainRecord(currentValue) && isPlainRecord(patchValue)) {
+      result[key] = mergeNestedRecord(currentValue, patchValue);
+    } else {
+      result[key] = patchValue;
+    }
+  }
+  return result as T;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function handleExtensionMessage(

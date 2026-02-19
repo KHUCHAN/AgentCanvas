@@ -109,17 +109,11 @@ export class ScheduleService {
     const next: Task = withTaskDefaults({
       ...current,
       ...patch,
-      overrides: patch.overrides
-        ? {
-            ...(current.overrides ?? {}),
-            ...patch.overrides
-          }
+      overrides: patch.overrides !== undefined
+        ? mergeNestedRecords(current.overrides, patch.overrides)
         : current.overrides,
-      meta: patch.meta
-        ? {
-            ...(current.meta ?? {}),
-            ...patch.meta
-          }
+      meta: patch.meta !== undefined
+        ? mergeNestedRecords(current.meta, patch.meta)
         : current.meta,
       updatedAtMs: now
     });
@@ -244,5 +238,88 @@ function buildPatch(previous: Task, next: Task): Partial<Task> {
 }
 
 function isEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return deepEqual(left, right, new WeakMap<object, WeakSet<object>>());
+}
+
+function deepEqual(
+  left: unknown,
+  right: unknown,
+  seenPairs: WeakMap<object, WeakSet<object>>
+): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (typeof left !== typeof right) {
+    return false;
+  }
+  if (left === null || right === null || left === undefined || right === undefined) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) {
+      return false;
+    }
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (!deepEqual(left[index], right[index], seenPairs)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (!isPlainObject(left) || !isPlainObject(right)) {
+    return false;
+  }
+
+  const knownRights = seenPairs.get(left);
+  if (knownRights?.has(right)) {
+    return true;
+  }
+  if (knownRights) {
+    knownRights.add(right);
+  } else {
+    seenPairs.set(left, new WeakSet<object>([right]));
+  }
+
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    const leftKey = leftKeys[index];
+    const rightKey = rightKeys[index];
+    if (leftKey !== rightKey) {
+      return false;
+    }
+    if (!deepEqual(left[leftKey], right[rightKey], seenPairs)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function mergeNestedRecords<T extends Record<string, unknown> | undefined>(
+  base: T,
+  patch: T
+): T {
+  if (!patch || !isPlainObject(patch)) {
+    return patch;
+  }
+  const result: Record<string, unknown> = isPlainObject(base) ? { ...base } : {};
+  for (const [key, patchValue] of Object.entries(patch)) {
+    const currentValue = result[key];
+    if (isPlainObject(currentValue) && isPlainObject(patchValue)) {
+      result[key] = mergeNestedRecords(currentValue, patchValue);
+    } else {
+      result[key] = patchValue;
+    }
+  }
+  return result as T;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

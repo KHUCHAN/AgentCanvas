@@ -953,13 +953,12 @@ button {
 }
 
 .schedule-now-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
   width: 2px;
+  height: 100%;
   background: color-mix(in srgb, #2fa184 88%, white 12%);
+  box-shadow: 0 0 12px color-mix(in srgb, #2fa184 45%, transparent);
+  border-radius: 999px;
   pointer-events: none;
-  z-index: 10;
 }
 
 .run-item {

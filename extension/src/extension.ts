@@ -121,7 +121,7 @@ class AgentCanvasPanel {
       }
       this.scheduleSubscriberByRunId.clear();
       for (const timer of this.demoRunTimers.values()) {
-        clearInterval(timer);
+        clearTimeout(timer);
       }
       this.demoRunTimers.clear();
       this.activeRunStops.clear();
@@ -1441,19 +1441,71 @@ class AgentCanvasPanel {
     this.activeRunFlowById.set(runId, flowName);
 
     let stopped = false;
+    let ticking = false;
+    let completed = false;
+    let timer: NodeJS.Timeout | undefined;
     const stop = () => {
       stopped = true;
     };
     this.activeRunStops.set(runId, stop);
 
-    const timer = setInterval(async () => {
+    const cleanupDemoRun = () => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      this.demoRunTimers.delete(runId);
+      this.activeRunStops.delete(runId);
+      this.activeRunFlowById.delete(runId);
+    };
+
+    const finishDemo = async (status: "success" | "failed" | "stopped", message?: string) => {
+      try {
+        await finishRun({
+          workspaceRoot,
+          flowName,
+          runId,
+          status,
+          message
+        });
+      } finally {
+        cleanupDemoRun();
+      }
+    };
+
+    const scheduleNextTick = () => {
+      if (completed) {
+        return;
+      }
+      if (timer) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        void tick();
+      }, 1000);
+      this.demoRunTimers.set(runId, timer);
+    };
+
+    const tick = async () => {
+      if (completed) {
+        return;
+      }
+      if (ticking) {
+        scheduleNextTick();
+        return;
+      }
+      ticking = true;
       try {
         const current = this.scheduleService.getTasks(runId);
+        const statusById = new Map(current.map((task) => [task.id, task.status] as const));
         const running = current.find((task) => task.status === "running");
 
         if (stopped) {
           for (const task of current) {
-            if (task.status === "done" || task.status === "failed" || task.status === "canceled") {
+            if (isTerminalTaskStatus(task.status)) {
               continue;
             }
             this.scheduleService.patchTask(runId, task.id, {
@@ -1462,17 +1514,7 @@ class AgentCanvasPanel {
             });
           }
           this.scheduleService.recompute(runId);
-          await finishRun({
-            workspaceRoot,
-            flowName,
-            runId,
-            status: "stopped",
-            message: "Stopped by user"
-          });
-          clearInterval(timer);
-          this.demoRunTimers.delete(runId);
-          this.activeRunStops.delete(runId);
-          this.activeRunFlowById.delete(runId);
+          await finishDemo("stopped", "Stopped by user");
           return;
         }
 
@@ -1502,74 +1544,62 @@ class AgentCanvasPanel {
             this.scheduleService.patchTask(runId, running.id, { progress: nextProgress });
           }
           this.scheduleService.recompute(runId);
-        } else {
-          const runnable = current.find((task) => {
-            if (!(task.status === "planned" || task.status === "ready")) {
-              return false;
-            }
-            return task.deps.every((depId) => current.find((item) => item.id === depId)?.status === "done");
-          });
+          return;
+        }
 
-          if (runnable) {
-            this.scheduleService.patchTask(runId, runnable.id, {
-              status: "running",
-              progress: 0,
-              actualStartMs: Date.now()
-            });
-            await appendRunEvent({
-              workspaceRoot,
-              flowName,
-              event: {
-                ts: Date.now(),
-                flow: flowName,
-                runId,
-                type: "node_started",
-                nodeId: String(runnable.meta?.nodeId ?? runnable.id),
-                input: {
-                  title: runnable.title
-                }
-              }
-            });
-            this.scheduleService.recompute(runId);
-          } else if (
-            current.every(
-              (task) =>
-                task.status === "done" ||
-                task.status === "failed" ||
-                task.status === "canceled"
-            )
-          ) {
-            await finishRun({
-              workspaceRoot,
-              flowName,
+        const runnable = current.find((task) => {
+          if (!(task.status === "planned" || task.status === "ready")) {
+            return false;
+          }
+          return task.deps.every((depId) => statusById.get(depId) === "done");
+        });
+
+        if (runnable) {
+          this.scheduleService.patchTask(runId, runnable.id, {
+            status: "running",
+            progress: 0,
+            actualStartMs: Date.now()
+          });
+          await appendRunEvent({
+            workspaceRoot,
+            flowName,
+            event: {
+              ts: Date.now(),
+              flow: flowName,
               runId,
-              status: "success"
-            });
-            clearInterval(timer);
-            this.demoRunTimers.delete(runId);
-            this.activeRunStops.delete(runId);
-            this.activeRunFlowById.delete(runId);
+              type: "node_started",
+              nodeId: String(runnable.meta?.nodeId ?? runnable.id),
+              input: {
+                title: runnable.title
+              }
+            }
+          });
+          this.scheduleService.recompute(runId);
+          return;
+        }
+
+        if (current.length > 0 && current.every((task) => isTerminalTaskStatus(task.status))) {
+          const hasFailure = current.some((task) => task.status === "failed" || task.status === "blocked");
+          await finishDemo(
+            hasFailure ? "failed" : "success",
+            hasFailure ? "Demo schedule contains blocked or failed tasks" : undefined
+          );
+          if (!hasFailure) {
             this.toast("info", `Demo schedule run complete: ${runId}`);
           }
         }
       } catch (error) {
-        clearInterval(timer);
-        this.demoRunTimers.delete(runId);
-        this.activeRunStops.delete(runId);
-        this.activeRunFlowById.delete(runId);
         const detail = error instanceof Error ? error.message : String(error);
-        await finishRun({
-          workspaceRoot,
-          flowName,
-          runId,
-          status: "failed",
-          message: detail
-        });
+        await finishDemo("failed", detail);
         this.toast("error", `Demo schedule run failed: ${detail}`);
+        return;
+      } finally {
+        ticking = false;
       }
-    }, 1000);
+      scheduleNextTick();
+    };
 
-    this.demoRunTimers.set(runId, timer);
+    scheduleNextTick();
     this.toast("info", `Demo schedule started: ${runId}`);
     return { runId };
   }
@@ -1759,92 +1789,108 @@ class AgentCanvasPanel {
       stopped = true;
     });
 
-    while (true) {
-      if (stopped) {
-        const current = this.scheduleService.getTasks(input.runId);
-        for (const task of current) {
-          if (task.status === "done" || task.status === "failed" || task.status === "canceled") {
-            continue;
+    const idlePollMs = 500;
+    const stallTimeoutMs = 10_000;
+    let stalledSinceMs: number | undefined;
+
+    try {
+      while (true) {
+        if (stopped) {
+          const current = this.scheduleService.getTasks(input.runId);
+          for (const task of current) {
+            if (isTerminalTaskStatus(task.status)) {
+              continue;
+            }
+            this.scheduleService.patchTask(input.runId, task.id, {
+              status: "canceled",
+              actualEndMs: Date.now()
+            });
           }
-          this.scheduleService.patchTask(input.runId, task.id, {
-            status: "canceled",
-            actualEndMs: Date.now()
-          });
+          this.scheduleService.recompute(input.runId);
+          break;
         }
-        this.scheduleService.recompute(input.runId);
-        break;
-      }
 
-      const tasks = this.scheduleService.getTasks(input.runId);
-      const hasFailure = tasks.some((task) => task.status === "failed");
-      if (hasFailure) {
-        failedMessage = "One or more tasks failed";
-        break;
-      }
-
-      const allFinished =
-        tasks.length > 0 &&
-        tasks.every(
-          (task) =>
-            task.status === "done" ||
-            task.status === "failed" ||
-            task.status === "canceled"
-        );
-      if (allFinished) {
-        break;
-      }
-
-      const nextTask = tasks.find((task) => {
-        if (!(task.status === "planned" || task.status === "ready")) {
-          return false;
+        const tasks = this.scheduleService.getTasks(input.runId);
+        const statusById = new Map(tasks.map((task) => [task.id, task.status] as const));
+        if (tasks.length === 0) {
+          break;
         }
-        return task.deps.every((depId) => tasks.find((item) => item.id === depId)?.status === "done");
-      });
 
-      if (!nextTask) {
-        await sleep(120);
-        continue;
-      }
+        const hasFailure = tasks.some((task) => task.status === "failed");
+        if (hasFailure) {
+          failedMessage = "One or more tasks failed";
+          break;
+        }
 
-      this.scheduleService.patchTask(input.runId, nextTask.id, {
-        status: "running",
-        actualStartMs: Date.now(),
-        progress: 0
-      });
-      await appendRunEvent({
-        workspaceRoot,
-        flowName: input.flowName,
-        event: {
-          ts: Date.now(),
-          flow: input.flowName,
-          runId: input.runId,
-          type: "node_started",
-          nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
-          input: {
-            title: nextTask.title
+        const allFinished = tasks.every((task) => isTerminalTaskStatus(task.status));
+        if (allFinished) {
+          if (tasks.some((task) => task.status === "blocked")) {
+            failedMessage = failedMessage ?? "One or more tasks were blocked";
           }
+          break;
         }
-      });
 
-      const pinned =
-        input.usePinnedOutputs && nextTask.meta?.nodeId
-          ? await getPin({
-              workspaceRoot,
-              flowName: input.flowName,
-              nodeId: String(nextTask.meta.nodeId)
-            })
-          : undefined;
+        const nextTask = tasks.find((task) => {
+          if (!(task.status === "planned" || task.status === "ready")) {
+            return false;
+          }
+          return task.deps.every((depId) => statusById.get(depId) === "done");
+        });
 
-      if (pinned) {
-        taskOutputs.set(nextTask.id, pinned.output);
+        if (!nextTask) {
+          const missingDependencyTasks = tasks.filter(
+            (task) =>
+              (task.status === "planned" || task.status === "ready") &&
+              task.deps.some((depId) => !statusById.has(depId))
+          );
+          if (missingDependencyTasks.length > 0) {
+            for (const task of missingDependencyTasks) {
+              const missingDeps = task.deps.filter((depId) => !statusById.has(depId));
+              this.scheduleService.patchTask(input.runId, task.id, {
+                status: "blocked",
+                blocker: {
+                  kind: "external",
+                  message: `Missing dependencies: ${missingDeps.join(", ")}`
+                },
+                actualEndMs: Date.now()
+              });
+            }
+            this.scheduleService.recompute(input.runId);
+            failedMessage = "Run blocked by missing task dependencies";
+            break;
+          }
+
+          const now = Date.now();
+          if (stalledSinceMs === undefined) {
+            stalledSinceMs = now;
+          } else if (now - stalledSinceMs >= stallTimeoutMs) {
+            const stalledTasks = tasks.filter(
+              (task) => task.status === "planned" || task.status === "ready" || task.status === "running"
+            );
+            for (const task of stalledTasks) {
+              this.scheduleService.patchTask(input.runId, task.id, {
+                status: "blocked",
+                blocker: {
+                  kind: "external",
+                  message: "Run stalled: unresolved dependencies or dependency cycle"
+                },
+                actualEndMs: Date.now()
+              });
+            }
+            this.scheduleService.recompute(input.runId);
+            failedMessage = "Run stalled due to unresolved dependencies";
+            break;
+          }
+          await sleep(idlePollMs);
+          continue;
+        }
+
+        stalledSinceMs = undefined;
+
         this.scheduleService.patchTask(input.runId, nextTask.id, {
-          status: "done",
-          progress: 1,
-          actualEndMs: Date.now(),
-          meta: {
-            ...(nextTask.meta ?? {}),
-            source: "pinned"
-          }
+          status: "running",
+          actualStartMs: Date.now(),
+          progress: 0
         });
         await appendRunEvent({
           workspaceRoot,
@@ -1853,103 +1899,145 @@ class AgentCanvasPanel {
             ts: Date.now(),
             flow: input.flowName,
             runId: input.runId,
-            type: "node_output",
+            type: "node_started",
             nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
-            output: pinned.output,
+            input: {
+              title: nextTask.title
+            }
+          }
+        });
+
+        const pinned =
+          input.usePinnedOutputs && nextTask.meta?.nodeId
+            ? await getPin({
+                workspaceRoot,
+                flowName: input.flowName,
+                nodeId: String(nextTask.meta.nodeId)
+              })
+            : undefined;
+
+        if (pinned) {
+          taskOutputs.set(nextTask.id, pinned.output);
+          this.scheduleService.patchTask(input.runId, nextTask.id, {
+            status: "done",
+            progress: 1,
+            actualEndMs: Date.now(),
             meta: {
+              ...(nextTask.meta ?? {}),
               source: "pinned"
             }
-          }
+          });
+          await appendRunEvent({
+            workspaceRoot,
+            flowName: input.flowName,
+            event: {
+              ts: Date.now(),
+              flow: input.flowName,
+              runId: input.runId,
+              type: "node_output",
+              nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+              output: pinned.output,
+              meta: {
+                source: "pinned"
+              }
+            }
+          });
+          this.scheduleService.recompute(input.runId);
+          continue;
+        }
+
+        const node = nodeById.get(String(nextTask.meta?.nodeId ?? ""));
+        const backend = await this.resolveBackendForTask(input.requestedBackendId, node);
+        const prompt = this.buildTaskPrompt(nextTask, node, taskOutputs, input.flowName);
+        const result = await executeCliPrompt({
+          backend,
+          prompt,
+          workspacePath: this.getWorkspaceRoot(),
+          timeoutMs: 120_000
         });
+
+        if (result.success) {
+          taskOutputs.set(nextTask.id, result.output);
+          this.scheduleService.patchTask(input.runId, nextTask.id, {
+            status: "done",
+            progress: 1,
+            actualEndMs: Date.now(),
+            meta: {
+              ...(nextTask.meta ?? {}),
+              backendId: backend.id
+            }
+          });
+          await appendRunEvent({
+            workspaceRoot,
+            flowName: input.flowName,
+            event: {
+              ts: Date.now(),
+              flow: input.flowName,
+              runId: input.runId,
+              type: "node_output",
+              nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+              output: result.output,
+              meta: {
+                backendId: backend.id,
+                durationMs: result.durationMs
+              }
+            }
+          });
+        } else {
+          failedMessage = result.error || "CLI execution failed";
+          this.scheduleService.patchTask(input.runId, nextTask.id, {
+            status: "failed",
+            actualEndMs: Date.now(),
+            blocker: {
+              kind: "error",
+              message: failedMessage
+            },
+            meta: {
+              ...(nextTask.meta ?? {}),
+              backendId: backend.id
+            }
+          });
+          await appendRunEvent({
+            workspaceRoot,
+            flowName: input.flowName,
+            event: {
+              ts: Date.now(),
+              flow: input.flowName,
+              runId: input.runId,
+              type: "node_failed",
+              nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+              message: failedMessage,
+              meta: {
+                backendId: backend.id,
+                durationMs: result.durationMs
+              }
+            }
+          });
+        }
+
         this.scheduleService.recompute(input.runId);
-        continue;
+        if (failedMessage) {
+          break;
+        }
       }
 
-      const node = nodeById.get(String(nextTask.meta?.nodeId ?? ""));
-      const backend = await this.resolveBackendForTask(input.requestedBackendId, node);
-      const prompt = this.buildTaskPrompt(nextTask, node, taskOutputs, input.flowName);
-      const result = await executeCliPrompt({
-        backend,
-        prompt,
-        workspacePath: this.getWorkspaceRoot(),
-        timeoutMs: 120_000
+      const status = stopped ? "stopped" : failedMessage ? "failed" : "success";
+      await finishRun({
+        workspaceRoot,
+        flowName: input.flowName,
+        runId: input.runId,
+        status,
+        message: failedMessage
       });
-
-      if (result.success) {
-        taskOutputs.set(nextTask.id, result.output);
-        this.scheduleService.patchTask(input.runId, nextTask.id, {
-          status: "done",
-          progress: 1,
-          actualEndMs: Date.now(),
-          meta: {
-            ...(nextTask.meta ?? {}),
-            backendId: backend.id
-          }
-        });
-        await appendRunEvent({
-          workspaceRoot,
-          flowName: input.flowName,
-          event: {
-            ts: Date.now(),
-            flow: input.flowName,
-            runId: input.runId,
-            type: "node_output",
-            nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
-            output: result.output,
-            meta: {
-              backendId: backend.id,
-              durationMs: result.durationMs
-            }
-          }
-        });
-      } else {
-        failedMessage = result.error || "CLI execution failed";
-        this.scheduleService.patchTask(input.runId, nextTask.id, {
-          status: "failed",
-          actualEndMs: Date.now(),
-          blocker: {
-            kind: "error",
-            message: failedMessage
-          },
-          meta: {
-            ...(nextTask.meta ?? {}),
-            backendId: backend.id
-          }
-        });
-        await appendRunEvent({
-          workspaceRoot,
-          flowName: input.flowName,
-          event: {
-            ts: Date.now(),
-            flow: input.flowName,
-            runId: input.runId,
-            type: "node_failed",
-            nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
-            message: failedMessage,
-            meta: {
-              backendId: backend.id,
-              durationMs: result.durationMs
-            }
-          }
-        });
+    } finally {
+      const timer = this.demoRunTimers.get(input.runId);
+      if (timer) {
+        clearTimeout(timer);
+        this.demoRunTimers.delete(input.runId);
       }
-
-      this.scheduleService.recompute(input.runId);
-      if (failedMessage) {
-        break;
-      }
+      this.activeRunStops.delete(input.runId);
+      this.activeRunFlowById.delete(input.runId);
     }
-
-    const status = stopped ? "stopped" : failedMessage ? "failed" : "success";
-    await finishRun({
-      workspaceRoot,
-      flowName: input.flowName,
-      runId: input.runId,
-      status,
-      message: failedMessage
-    });
-    this.activeRunStops.delete(input.runId);
-    this.activeRunFlowById.delete(input.runId);
   }
 
   private buildTasksFromFlow(
@@ -2482,6 +2570,10 @@ function resolveMcpServerId(
 
 function sanitizeRunNodeId(nodeId: string): string {
   return nodeId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function isTerminalTaskStatus(status: Task["status"]): boolean {
+  return status === "done" || status === "failed" || status === "canceled" || status === "blocked";
 }
 
 async function sleep(ms: number): Promise<void> {

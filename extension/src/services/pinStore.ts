@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PinnedOutput } from "../types";
 import { sanitizeFlowName } from "./flowStore";
+import { sanitizeFileName } from "./pathUtils";
 
 function pinDir(workspaceRoot: string, flowName: string): string {
   return join(workspaceRoot, ".agentcanvas", "pins", sanitizeFlowName(flowName));
@@ -85,8 +86,4 @@ export async function listPins(input: {
     }
   }
   return pins.sort((left, right) => right.pinnedAt - left.pinnedAt);
-}
-
-function sanitizeFileName(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
 }

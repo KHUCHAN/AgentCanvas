@@ -37,10 +37,16 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
     }
   }
 
-  const updatedIds: string[] = [];
-  const blockedIds: string[] = [];
+  const updatedSet = new Set<string>();
+  const blockedSet = new Set<string>();
   const processed = new Set<string>();
   const agentAvail = new Map<string, number>();
+  const now = Date.now();
+  const isTerminalStatus = (status: Task["status"]): boolean =>
+    status === "running" || status === "done" || status === "failed" || status === "canceled";
+  const markUpdated = (taskId: string): void => {
+    updatedSet.add(taskId);
+  };
 
   const depsEnd = (task: Task): number => {
     let maxEnd = 0;
@@ -85,20 +91,8 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
       task.plannedStartMs = plannedStart;
       task.plannedEndMs = plannedEnd;
       task.agentId = laneAgentId;
-      task.updatedAtMs = Date.now();
-      updatedIds.push(task.id);
-    }
-
-    if (
-      task.status === "planned" &&
-      task.actualStartMs === undefined &&
-      task.actualEndMs === undefined
-    ) {
-      task.status = "ready";
-      task.updatedAtMs = Date.now();
-      if (!updatedIds.includes(task.id)) {
-        updatedIds.push(task.id);
-      }
+      task.updatedAtMs = now;
+      markUpdated(task.id);
     }
 
     agentAvail.set(laneAgentId, plannedEnd);
@@ -112,33 +106,72 @@ export function computeSchedule(input: ComputeScheduleInput): ComputeScheduleRes
     }
   }
 
+  for (const [taskId, task] of tasks) {
+    if (isTerminalStatus(task.status)) {
+      continue;
+    }
+    const missingDeps = task.deps.filter((depId) => !tasks.has(depId));
+    const unresolvedDeps = task.deps.filter((depId) => tasks.has(depId) && !processed.has(depId));
+    if (missingDeps.length === 0 && unresolvedDeps.length === 0) {
+      continue;
+    }
+    const blockerMessage =
+      missingDeps.length > 0
+        ? `Missing dependencies: ${missingDeps.join(", ")}`
+        : "Dependency cycle detected";
+    const blockerChanged =
+      task.blocker?.kind !== "external" || task.blocker?.message !== blockerMessage;
+    if (task.status !== "blocked" || blockerChanged) {
+      task.status = "blocked";
+      task.blocker = {
+        kind: "external",
+        message: blockerMessage
+      };
+      task.updatedAtMs = now;
+      markUpdated(taskId);
+    }
+    blockedSet.add(taskId);
+  }
+
+  for (const taskId of processed) {
+    const task = tasks.get(taskId);
+    if (!task) {
+      continue;
+    }
+    if (
+      task.status === "planned" &&
+      task.actualStartMs === undefined &&
+      task.actualEndMs === undefined
+    ) {
+      task.status = "ready";
+      task.blocker = undefined;
+      task.updatedAtMs = now;
+      markUpdated(task.id);
+    }
+  }
+
   if (processed.size !== tasks.size) {
     for (const [taskId, task] of tasks) {
       if (processed.has(taskId)) {
         continue;
       }
-      const shouldBlock =
-        task.status !== "running" &&
-        task.status !== "done" &&
-        task.status !== "failed" &&
-        task.status !== "canceled";
-      if (!shouldBlock) {
+      if (isTerminalStatus(task.status)) {
         continue;
       }
-      task.status = "blocked";
-      task.blocker = {
-        kind: "external",
-        message: "Dependency cycle or unresolved dependency"
-      };
-      task.updatedAtMs = Date.now();
-      blockedIds.push(taskId);
-      if (!updatedIds.includes(taskId)) {
-        updatedIds.push(taskId);
+      if (!blockedSet.has(taskId)) {
+        task.status = "blocked";
+        task.blocker = {
+          kind: "external",
+          message: "Dependency cycle or unresolved dependency"
+        };
+        task.updatedAtMs = now;
+        markUpdated(taskId);
+        blockedSet.add(taskId);
       }
     }
   }
 
-  return { updatedIds, blockedIds };
+  return { updatedIds: [...updatedSet], blockedIds: [...blockedSet] };
 }
 
 function compareTasks(left: Task | undefined, right: Task | undefined): number {

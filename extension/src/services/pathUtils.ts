@@ -109,3 +109,7 @@ export async function isDirectory(path: string): Promise<boolean> {
 export function ensureAbsolutePath(path: string, workspacePath: string): string {
   return isAbsolute(path) ? path : resolve(workspacePath, path);
 }
+
+export function sanitizeFileName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
