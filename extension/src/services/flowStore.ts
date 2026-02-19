@@ -58,14 +58,23 @@ export async function loadFlow(input: {
 }): Promise<{ flowName: string; nodes: DiscoverySnapshot["nodes"]; edges: DiscoverySnapshot["edges"] }> {
   const safeName = sanitizeFlowName(input.flowName);
   const filePath = join(getFlowsDirectory(input.workspaceRoot), `${safeName}.yaml`);
-  const raw = await readFile(filePath, "utf8");
-  const parsed = JSON.parse(raw) as {
-    nodes?: DiscoverySnapshot["nodes"];
-    edges?: DiscoverySnapshot["edges"];
-  };
+
+  let raw: string;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch {
+    throw new Error(`Flow "${safeName}" not found. Create it first by saving a flow.`);
+  }
+
+  let parsed: { nodes?: DiscoverySnapshot["nodes"]; edges?: DiscoverySnapshot["edges"] };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    throw new Error(`Flow "${safeName}" is corrupted. The file contains invalid data.`);
+  }
 
   if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
-    throw new Error(`Invalid flow file: ${filePath}`);
+    throw new Error(`Flow "${safeName}" has an invalid structure. Expected nodes and edges arrays.`);
   }
 
   return {

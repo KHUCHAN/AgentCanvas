@@ -29,6 +29,9 @@ function profileFilePath(workspaceRoot: string, agentId: string): string {
 }
 
 function sanitizeFileName(value: string): string {
+  // Note: This replaces all non-safe chars with '_'. In practice, custom agent IDs
+  // follow the pattern "custom:[a-z0-9-]+" so the only replaced char is ':'.
+  // Collision risk is negligible since slugify() ensures unique base names.
   return value.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 

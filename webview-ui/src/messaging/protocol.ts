@@ -271,6 +271,8 @@ export type WebviewToExtensionMessage =
   | RequestMessage<"LIST_FLOWS">
   | RequestMessage<"LOAD_FLOW", { flowName: string }>
   | RequestMessage<"SAVE_FLOW", { flowName: string; nodes: DiscoverySnapshot["nodes"]; edges: DiscoverySnapshot["edges"] }>
+  | RequestMessage<"SAVE_NODE_POSITION", { nodeId: string; position: Position }>
+  | RequestMessage<"SAVE_NODE_POSITIONS", { positions: Array<{ nodeId: string; position: Position }> }>
   | RequestMessage<"LOG_INTERACTION_EVENT", {
       flowName: string;
       interactionId: string;

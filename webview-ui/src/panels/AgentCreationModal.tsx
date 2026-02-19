@@ -34,6 +34,7 @@ export default function AgentCreationModal({ open, onClose, onCreate }: AgentCre
   const [systemPrompt, setSystemPrompt] = useState("");
   const [isOrchestrator, setIsOrchestrator] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string>();
   const modalRef = useRef<HTMLFormElement>(null);
   useFocusTrap(modalRef, open);
 
@@ -46,6 +47,7 @@ export default function AgentCreationModal({ open, onClose, onCreate }: AgentCre
       setSystemPrompt("");
       setIsOrchestrator(false);
       setBusy(false);
+      setErrorMessage(undefined);
     }
   }, [open]);
 
@@ -69,6 +71,7 @@ export default function AgentCreationModal({ open, onClose, onCreate }: AgentCre
       return;
     }
     setBusy(true);
+    setErrorMessage(undefined);
     try {
       await onCreate({
         name: name.trim(),
@@ -78,6 +81,9 @@ export default function AgentCreationModal({ open, onClose, onCreate }: AgentCre
         systemPrompt: systemPrompt.trim() || undefined,
         isOrchestrator
       });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setErrorMessage(`Failed to create agent: ${detail}`);
     } finally {
       setBusy(false);
     }
@@ -135,6 +141,10 @@ export default function AgentCreationModal({ open, onClose, onCreate }: AgentCre
           <label>System Prompt</label>
           <textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={5} />
         </div>
+
+        {errorMessage && (
+          <div className="modal-error">{errorMessage}</div>
+        )}
 
         <div className="import-actions">
           <button type="button" onClick={onClose} disabled={busy}>Cancel</button>

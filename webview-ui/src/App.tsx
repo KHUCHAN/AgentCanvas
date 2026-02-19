@@ -408,6 +408,13 @@ export default function App() {
       .finally(() => setBusy(false));
   };
 
+  const saveNodePosition = (nodeId: string, position: Position) => {
+    postToExtension({
+      type: "SAVE_NODE_POSITION",
+      payload: { nodeId, position }
+    });
+  };
+
   const addAgentLink = (sourceAgentId: string, targetAgentId: string) => {
     postToExtension({
       type: "ADD_AGENT_LINK",
@@ -998,6 +1005,7 @@ export default function App() {
             onDropPattern={(patternId, position) => {
               void insertInteractionPattern(patternId, position).catch(() => undefined);
             }}
+            onSaveNodePosition={saveNodePosition}
           />
 
           <RightPanel

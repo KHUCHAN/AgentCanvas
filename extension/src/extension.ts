@@ -75,6 +75,8 @@ class AgentCanvasPanel {
   private notesLoaded = false;
   private agentLinks: StudioEdge[] = [];
   private agentLinksLoaded = false;
+  private nodePositions: Map<string, { x: number; y: number }> = new Map();
+  private nodePositionsLoaded = false;
 
   private constructor(panel: vscode.WebviewPanel, extensionContext: vscode.ExtensionContext) {
     this.panel = panel;
@@ -141,7 +143,17 @@ class AgentCanvasPanel {
   public async refreshState(asInitMessage = false): Promise<void> {
     await this.ensureNotesLoaded();
     await this.ensureAgentLinksLoaded();
+    await this.ensureNodePositionsLoaded();
     const snapshot = await runDiscovery(await this.buildProviderContext(), this.providers);
+
+    // Apply persisted node positions (from user drag)
+    for (const node of snapshot.nodes) {
+      const savedPosition = this.nodePositions.get(node.id);
+      if (savedPosition) {
+        node.position = { ...savedPosition };
+      }
+    }
+
     snapshot.nodes = [...snapshot.nodes, ...this.notes.map((note) => this.toNoteNode(note))];
     snapshot.edges = [...snapshot.edges, ...this.agentLinks];
     this.snapshot = snapshot;
@@ -498,6 +510,17 @@ class AgentCanvasPanel {
         );
         this.toast("info", `Saved flow: ${filePath}`);
         return { path: filePath };
+      }
+      case "SAVE_NODE_POSITION": {
+        await this.saveNodePosition(
+          message.payload.nodeId,
+          message.payload.position
+        );
+        return { ok: true };
+      }
+      case "SAVE_NODE_POSITIONS": {
+        await this.saveNodePositions(message.payload.positions);
+        return { ok: true };
       }
       case "LOG_INTERACTION_EVENT": {
         await this.logInteractionEvent({
@@ -961,6 +984,51 @@ class AgentCanvasPanel {
     }
   }
 
+  private async ensureNodePositionsLoaded(): Promise<void> {
+    if (this.nodePositionsLoaded) {
+      return;
+    }
+    const stored = this.extensionContext.workspaceState.get<
+      Array<[string, { x: number; y: number }]>
+    >(this.getNodePositionsStorageKey(), []);
+    this.nodePositions = new Map(stored);
+    this.nodePositionsLoaded = true;
+  }
+
+  private getNodePositionsStorageKey(): string {
+    const workspacePath =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+      this.snapshot?.agent.workspaceRoot ??
+      process.cwd();
+    return `agentCanvas.nodePositions:${workspacePath}`;
+  }
+
+  private async persistNodePositions(): Promise<void> {
+    await this.extensionContext.workspaceState.update(
+      this.getNodePositionsStorageKey(),
+      [...this.nodePositions.entries()]
+    );
+  }
+
+  private async saveNodePosition(
+    nodeId: string,
+    position: { x: number; y: number }
+  ): Promise<void> {
+    await this.ensureNodePositionsLoaded();
+    this.nodePositions.set(nodeId, position);
+    await this.persistNodePositions();
+  }
+
+  private async saveNodePositions(
+    positions: Array<{ nodeId: string; position: { x: number; y: number } }>
+  ): Promise<void> {
+    await this.ensureNodePositionsLoaded();
+    for (const entry of positions) {
+      this.nodePositions.set(entry.nodeId, entry.position);
+    }
+    await this.persistNodePositions();
+  }
+
   private async ensureNotesLoaded(): Promise<void> {
     if (this.notesLoaded) {
       return;
@@ -1209,56 +1277,65 @@ class AgentCanvasPanel {
     const availableSkillIds = new Set(snapshot.skills.map((skill) => skill.id));
     const availableMcpIds = new Set(snapshot.mcpServers.map((server) => server.id));
 
+    // Phase 1: Create or update agents
+    this.postGenerationProgress("building_prompt", `Creating ${structure.agents.length} agent(s)...`, 10);
     for (const generated of structure.agents) {
       const sourceNameKey = normalizeLabel(generated.name);
       const existing = normalizedNameToAgent.get(sourceNameKey);
       let targetAgent: AgentProfile;
 
-      if (existing && (overwriteExisting || existing.id.startsWith("custom:"))) {
-        targetAgent = await applyAgentProfilePatch({
-          workspaceRoot,
-          baseProfile: existing,
-          patch: {
-            role: generated.role,
-            roleLabel: generated.roleLabel,
-            description: generated.description,
-            systemPrompt: generated.systemPrompt,
-            isOrchestrator: generated.isOrchestrator,
-            color: generated.color,
-            avatar: generated.avatar
-          }
-        });
-      } else {
-        const preferredName = (generated.name || "Generated Agent").trim();
-        const finalName = makeUniqueLabel(preferredName, usedNames);
-        usedNames.add(normalizeLabel(finalName));
-        targetAgent = await createCustomAgentProfile({
-          workspaceRoot,
-          homeDir,
-          name: finalName,
-          role: generated.role,
-          roleLabel: generated.roleLabel,
-          description: generated.description,
-          systemPrompt: generated.systemPrompt,
-          isOrchestrator: generated.isOrchestrator
-        });
-
-        if (generated.color || generated.avatar) {
+      try {
+        if (existing && (overwriteExisting || existing.id.startsWith("custom:"))) {
           targetAgent = await applyAgentProfilePatch({
             workspaceRoot,
-            baseProfile: targetAgent,
+            baseProfile: existing,
             patch: {
+              role: generated.role,
+              roleLabel: generated.roleLabel,
+              description: generated.description,
+              systemPrompt: generated.systemPrompt,
+              isOrchestrator: generated.isOrchestrator,
               color: generated.color,
               avatar: generated.avatar
             }
           });
-        }
-      }
+        } else {
+          const preferredName = (generated.name || "Generated Agent").trim();
+          const finalName = makeUniqueLabel(preferredName, usedNames);
+          usedNames.add(normalizeLabel(finalName));
+          targetAgent = await createCustomAgentProfile({
+            workspaceRoot,
+            homeDir,
+            name: finalName,
+            role: generated.role,
+            roleLabel: generated.roleLabel,
+            description: generated.description,
+            systemPrompt: generated.systemPrompt,
+            isOrchestrator: generated.isOrchestrator
+          });
 
-      normalizedNameToAgent.set(sourceNameKey, targetAgent);
-      createdBySourceName.set(sourceNameKey, targetAgent);
+          if (generated.color || generated.avatar) {
+            targetAgent = await applyAgentProfilePatch({
+              workspaceRoot,
+              baseProfile: targetAgent,
+              patch: {
+                color: generated.color,
+                avatar: generated.avatar
+              }
+            });
+          }
+        }
+
+        normalizedNameToAgent.set(sourceNameKey, targetAgent);
+        createdBySourceName.set(sourceNameKey, targetAgent);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.toast("warning", `Failed to create/update agent "${generated.name}": ${detail}`);
+      }
     }
 
+    // Phase 2: Set delegation relationships
+    this.postGenerationProgress("building_prompt", "Setting delegation relationships...", 30);
     for (const generated of structure.agents) {
       const orchestrator = createdBySourceName.get(normalizeLabel(generated.name));
       if (!orchestrator || !generated.isOrchestrator) {
@@ -1268,14 +1345,26 @@ class AgentCanvasPanel {
         .map((workerName) => createdBySourceName.get(normalizeLabel(workerName))?.id)
         .filter((workerId): workerId is string => Boolean(workerId))
         .filter((workerId) => workerId !== orchestrator.id);
-      await setAgentDelegation({
-        workspaceRoot,
-        agent: orchestrator,
-        workerIds
-      });
+
+      if (workerIds.length === 0) {
+        continue;
+      }
+
+      try {
+        await setAgentDelegation({
+          workspaceRoot,
+          agent: orchestrator,
+          workerIds
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.toast("warning", `Failed to set delegation for "${orchestrator.name}": ${detail}`);
+      }
     }
 
-    if (createSuggestedSkills) {
+    // Phase 3: Create suggested skills
+    if (createSuggestedSkills && structure.suggestedNewSkills.length > 0) {
+      this.postGenerationProgress("building_prompt", "Creating suggested skills...", 50);
       const skillBaseDir = join(workspaceRoot, ".github", "skills");
       for (const suggested of structure.suggestedNewSkills) {
         const skillName = normalizeSkillName(suggested.name);
@@ -1297,22 +1386,41 @@ class AgentCanvasPanel {
             this.toast("warning", `Failed to create suggested skill ${skillName}: ${detail}`);
           }
         }
-        availableSkillIds.add(skillPath);
 
         const owner = createdBySourceName.get(normalizeLabel(suggested.forAgent));
         if (owner) {
-          await assignSkillToAgent({
-            workspaceRoot,
-            agent: owner,
-            skillId: skillPath
-          });
+          try {
+            await assignSkillToAgent({
+              workspaceRoot,
+              agent: owner,
+              skillId: skillPath
+            });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            this.toast("warning", `Failed to assign skill ${skillName} to ${owner.name}: ${detail}`);
+          }
         }
       }
     }
 
-    const latestSnapshot = await runDiscovery(await this.buildProviderContext(), this.providers);
+    // Phase 4: Resolve and assign existing skills/MCPs
+    this.postGenerationProgress("building_prompt", "Assigning skills and MCP servers...", 70);
+    let latestSnapshot: DiscoverySnapshot;
+    try {
+      latestSnapshot = await runDiscovery(await this.buildProviderContext(), this.providers);
+    } catch {
+      latestSnapshot = snapshot;
+    }
     const knownSkills = latestSnapshot.skills;
     const knownMcps = latestSnapshot.mcpServers;
+
+    // Also add known skill IDs to the available set
+    for (const skill of knownSkills) {
+      availableSkillIds.add(skill.id);
+    }
+    for (const server of knownMcps) {
+      availableMcpIds.add(server.id);
+    }
 
     for (const generated of structure.agents) {
       const targetAgent = createdBySourceName.get(normalizeLabel(generated.name));
@@ -1322,28 +1430,40 @@ class AgentCanvasPanel {
 
       for (const requestedSkill of generated.assignedSkillIds) {
         const resolvedSkillId = resolveSkillId(requestedSkill, knownSkills);
-        if (!resolvedSkillId || !availableSkillIds.has(resolvedSkillId) && !knownSkills.some((skill) => skill.id === resolvedSkillId)) {
+        if (!resolvedSkillId) {
           continue;
         }
-        await assignSkillToAgent({
-          workspaceRoot,
-          agent: targetAgent,
-          skillId: resolvedSkillId
-        });
+        try {
+          await assignSkillToAgent({
+            workspaceRoot,
+            agent: targetAgent,
+            skillId: resolvedSkillId
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.toast("warning", `Failed to assign skill "${requestedSkill}" to ${targetAgent.name}: ${detail}`);
+        }
       }
 
       for (const requestedMcp of generated.assignedMcpServerIds) {
         const resolvedMcpId = resolveMcpServerId(requestedMcp, knownMcps);
-        if (!resolvedMcpId || !availableMcpIds.has(resolvedMcpId) && !knownMcps.some((server) => server.id === resolvedMcpId)) {
+        if (!resolvedMcpId) {
           continue;
         }
-        await assignMcpToAgent({
-          workspaceRoot,
-          agent: targetAgent,
-          mcpServerId: resolvedMcpId
-        });
+        try {
+          await assignMcpToAgent({
+            workspaceRoot,
+            agent: targetAgent,
+            mcpServerId: resolvedMcpId
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.toast("warning", `Failed to assign MCP "${requestedMcp}" to ${targetAgent.name}: ${detail}`);
+        }
       }
     }
+
+    this.postGenerationProgress("done", `Applied ${createdBySourceName.size} agent(s) successfully`, 100);
   }
 
   private async buildDevServerHtml(devServerUrl: string): Promise<string | undefined> {

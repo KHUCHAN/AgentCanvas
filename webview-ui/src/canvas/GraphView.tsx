@@ -63,6 +63,7 @@ type GraphViewProps = {
   onAssignSkillToAgent: (agentId: string, skillId: string) => void;
   onAssignMcpToAgent: (agentId: string, mcpServerId: string) => void;
   onDropPattern: (patternId: string, position: Position) => void;
+  onSaveNodePosition: (nodeId: string, position: Position) => void;
 };
 
 const nodeTypes: NodeTypes = {
@@ -121,7 +122,8 @@ function GraphCanvas({
   onOpenAgentDetail,
   onAssignSkillToAgent,
   onAssignMcpToAgent,
-  onDropPattern
+  onDropPattern,
+  onSaveNodePosition
 }: GraphViewProps) {
   const reactFlow = useReactFlow();
   const [panModifierActive, setPanModifierActive] = useState(false);
@@ -462,14 +464,14 @@ function GraphCanvas({
           onSelectEdge(undefined);
         }}
         onNodeDragStop={(_event, node) => {
-          if (node.type !== "note") {
-            return;
+          const position = { x: node.position.x, y: node.position.y };
+          // Save position for all node types
+          onSaveNodePosition(node.id, position);
+          // Additionally save note text+position via dedicated handler
+          if (node.type === "note") {
+            const data = node.data as Record<string, unknown>;
+            onSaveNote(node.id, String(data.text ?? ""), position);
           }
-          const data = node.data as Record<string, unknown>;
-          onSaveNote(node.id, String(data.text ?? ""), {
-            x: node.position.x,
-            y: node.position.y
-          });
         }}
         fitView
         minZoom={0.2}

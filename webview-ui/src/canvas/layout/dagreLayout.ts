@@ -8,7 +8,8 @@ const NODE_SIZE: Record<string, { w: number; h: number }> = {
   ruleDoc: { w: 230, h: 150 },
   skill: { w: 230, h: 190 },
   folder: { w: 230, h: 140 },
-  note: { w: 230, h: 220 }
+  note: { w: 230, h: 220 },
+  system: { w: 230, h: 120 }
 };
 
 export function applyDagreLayout(nodes: Node[], edges: Edge[]): Node[] {
