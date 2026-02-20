@@ -94,7 +94,8 @@ import type {
   StudioEdge,
   StickyNote,
   HandoffEnvelope,
-  SessionContext
+  SessionContext,
+  TaskSubmissionOptions
 } from "./types";
 
 const panelControllers = new Map<string, AgentCanvasPanel>();
@@ -232,7 +233,7 @@ class AgentCanvasPanel {
     // Apply persisted node positions (from user drag)
     for (const node of snapshot.nodes) {
       const savedPosition = this.nodePositions.get(node.id);
-      if (savedPosition) {
+      if (savedPosition && this.isValidPosition(savedPosition)) {
         node.position = { ...savedPosition };
       }
     }
@@ -667,6 +668,8 @@ class AgentCanvasPanel {
           backendId: message.payload.backendId,
           runName: message.payload.runName,
           tags: message.payload.tags,
+          instruction: message.payload.instruction,
+          taskOptions: message.payload.taskOptions,
           usePinnedOutputs: message.payload.usePinnedOutputs,
           session: message.payload.session
         });
@@ -1005,17 +1008,7 @@ class AgentCanvasPanel {
   }
 
   private async buildWebviewHtml(): Promise<string> {
-    const devServerUrl = vscode.workspace
-      .getConfiguration("agentCanvas")
-      .get<string>("webviewDevServerUrl", "")
-      .trim();
-
-    if (devServerUrl) {
-      const devHtml = await this.buildDevServerHtml(devServerUrl);
-      if (devHtml) {
-        return devHtml;
-      }
-    }
+    // Always use bundled webview assets to avoid stale/incorrect UI from external dev servers.
 
     const distUri = vscode.Uri.joinPath(this.extensionContext.extensionUri, "webview-ui", "dist");
     const indexUri = vscode.Uri.joinPath(distUri, "index.html");
@@ -1428,7 +1421,21 @@ class AgentCanvasPanel {
     const stored = this.extensionContext.workspaceState.get<
       Array<[string, { x: number; y: number }]>
     >(this.getNodePositionsStorageKey(), []);
-    this.nodePositions = new Map(stored);
+    const sanitized = new Map<string, { x: number; y: number }>();
+    for (const entry of stored) {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        continue;
+      }
+      const [nodeId, position] = entry;
+      if (typeof nodeId !== "string" || !nodeId) {
+        continue;
+      }
+      if (!this.isValidPosition(position)) {
+        continue;
+      }
+      sanitized.set(nodeId, { x: position.x, y: position.y });
+    }
+    this.nodePositions = sanitized;
     this.nodePositionsLoaded = true;
   }
 
@@ -1449,6 +1456,9 @@ class AgentCanvasPanel {
     position: { x: number; y: number }
   ): Promise<void> {
     await this.ensureNodePositionsLoaded();
+    if (!this.isValidPosition(position)) {
+      return;
+    }
     this.nodePositions.set(nodeId, position);
     await this.persistNodePositions();
   }
@@ -1458,9 +1468,30 @@ class AgentCanvasPanel {
   ): Promise<void> {
     await this.ensureNodePositionsLoaded();
     for (const entry of positions) {
+      if (!this.isValidPosition(entry.position)) {
+        continue;
+      }
       this.nodePositions.set(entry.nodeId, entry.position);
     }
     await this.persistNodePositions();
+  }
+
+  private isValidPosition(position: unknown): position is { x: number; y: number } {
+    if (!position || typeof position !== "object") {
+      return false;
+    }
+
+    const { x, y } = position as { x?: unknown; y?: unknown };
+    if (typeof x !== "number" || typeof y !== "number") {
+      return false;
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return false;
+    }
+
+    // Guard against corrupted persisted coordinates that can break viewport fitting.
+    const POSITION_LIMIT = 500_000;
+    return Math.abs(x) <= POSITION_LIMIT && Math.abs(y) <= POSITION_LIMIT;
   }
 
   private async ensureNotesLoaded(): Promise<void> {
@@ -1571,8 +1602,9 @@ class AgentCanvasPanel {
 
   private getWorkspaceRoot(): string {
     const candidates = [
-      this.snapshot?.agent.workspaceRoot,
+      // Prefer the currently opened VS Code workspace to avoid stale snapshot paths.
       vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+      this.snapshot?.agent.workspaceRoot,
       process.cwd()
     ];
 
@@ -2152,6 +2184,8 @@ class AgentCanvasPanel {
     backendId?: CliBackendId;
     runName?: string;
     tags?: string[];
+    instruction?: string;
+    taskOptions?: TaskSubmissionOptions;
     usePinnedOutputs?: boolean;
     session?: SessionContext;
   }): Promise<{ runId: string; flowName: string; taskCount: number }> {
@@ -2173,6 +2207,10 @@ class AgentCanvasPanel {
     });
 
     const tasks = this.buildTasksFromFlow(run.runId, flow.nodes, flow.edges);
+    this.applyTaskSubmissionOptions(tasks, {
+      instruction: input.instruction,
+      taskOptions: input.taskOptions
+    });
     this.scheduleService.createRun(run.runId, tasks);
     this.activeRunFlowById.set(run.runId, flowNameForRun);
 
@@ -2181,6 +2219,8 @@ class AgentCanvasPanel {
       flowName: flowNameForRun,
       nodes: flow.nodes,
       edges: flow.edges,
+      instruction: input.instruction,
+      taskOptions: input.taskOptions,
       requestedBackendId: input.backendId,
       usePinnedOutputs: input.usePinnedOutputs
     }).catch((error) => {
@@ -2328,6 +2368,8 @@ class AgentCanvasPanel {
     flowName: string;
     nodes: DiscoverySnapshot["nodes"];
     edges: DiscoverySnapshot["edges"];
+    instruction?: string;
+    taskOptions?: TaskSubmissionOptions;
     requestedBackendId?: CliBackendId;
     usePinnedOutputs?: boolean;
     promptOverrides?: Record<string, string>;
@@ -2623,10 +2665,15 @@ class AgentCanvasPanel {
           node,
           runtimeResolution
         );
+        const runInstruction = input.instruction?.trim();
+        const memoryInstruction =
+          runInstruction && runInstruction.length > 0
+            ? `${runInstruction}\nSubtask: ${nextTask.title}`
+            : nextTask.title;
         const contextPacket = taskAgent
           ? await buildContextPacket({
             workspaceRoot,
-            taskInstruction: nextTask.title,
+            taskInstruction: memoryInstruction,
             agentId: taskAgent.id,
             flowName: input.flowName,
             budgetTokens: 1800
@@ -2670,7 +2717,9 @@ class AgentCanvasPanel {
           taskAgent,
           contextPacket,
           promptOverride,
-          communicationPolicy
+          communicationPolicy,
+          runInstruction,
+          input.taskOptions
         );
         const result = await executeCliPrompt({
           backend,
@@ -3232,6 +3281,49 @@ class AgentCanvasPanel {
     return tasks;
   }
 
+  private applyTaskSubmissionOptions(
+    tasks: Task[],
+    input: {
+      instruction?: string;
+      taskOptions?: TaskSubmissionOptions;
+    }
+  ): void {
+    if (tasks.length === 0) {
+      return;
+    }
+
+    const instruction = input.instruction?.trim();
+    const assignTo = input.taskOptions?.assignTo;
+    if (instruction) {
+      const targetTask =
+        (assignTo && assignTo !== "auto"
+          ? tasks.find((task) => task.agentId === assignTo)
+          : undefined) ??
+        tasks.find((task) => {
+          const profile = this.snapshot?.agents.find((agent) => agent.id === task.agentId);
+          return Boolean(profile?.isOrchestrator);
+        }) ??
+        tasks[0];
+      targetTask.title = instruction;
+      targetTask.updatedAtMs = Date.now();
+      targetTask.meta = {
+        ...(targetTask.meta ?? {}),
+        userInstruction: instruction
+      };
+    }
+
+    const priorityValue = mapPriorityToValue(input.taskOptions?.priority);
+    if (priorityValue === undefined) {
+      return;
+    }
+    for (const task of tasks) {
+      task.overrides = {
+        ...(task.overrides ?? {}),
+        priority: priorityValue
+      };
+    }
+  }
+
   private buildCommunicationPolicy(
     nodeId: string | undefined,
     nodes: DiscoverySnapshot["nodes"],
@@ -3302,7 +3394,9 @@ class AgentCanvasPanel {
       allowedTargetIds: string[];
       allowedTargets: string[];
       allowedSourceIds: string[];
-    }
+    },
+    runInstruction?: string,
+    taskOptions?: TaskSubmissionOptions
   ): string {
     const data = (node?.data ?? {}) as Record<string, unknown>;
     const name = String(data.name ?? data.title ?? task.title);
@@ -3320,10 +3414,21 @@ class AgentCanvasPanel {
         output: outputs.get(depId)
       }))
       .filter((item) => item.output !== undefined);
+    const workInstructionLine = runInstruction?.trim()
+      ? `User work request: ${runInstruction.trim()}`
+      : undefined;
+    const workOptionsLine = [
+      taskOptions?.priority ? `Priority: ${taskOptions.priority}` : undefined,
+      taskOptions?.assignTo && taskOptions.assignTo !== "auto" ? `Assigned worker: ${taskOptions.assignTo}` : undefined
+    ]
+      .filter((entry): entry is string => Boolean(entry))
+      .join(" · ");
     if (promptOverride?.trim()) {
       return [
         "## Manual Prompt Override",
         promptOverride.trim(),
+        ...(workInstructionLine ? ["", "## Work request", workInstructionLine] : []),
+        ...(workOptionsLine ? [workOptionsLine] : []),
         "",
         "## Communication firewall",
         communicationGuidance,
@@ -3346,6 +3451,8 @@ class AgentCanvasPanel {
         `Node: ${name}`,
         `Role: ${role}`,
         `Task: ${task.title}`,
+        ...(workInstructionLine ? [workInstructionLine] : []),
+        ...(workOptionsLine ? [workOptionsLine] : []),
         communicationGuidance
       ].join("\n"),
       agent: agent
@@ -3641,10 +3748,16 @@ class AgentCanvasPanel {
       this.postGenerationProgress("building_prompt", "Creating suggested skills...", 50);
       const skillBaseDir = join(workspaceRoot, ".github", "skills");
       for (const suggested of structure.suggestedNewSkills) {
-        const skillName = normalizeSkillName(suggested.name);
+        const rawSkillName = suggested.name.trim();
+        const skillName = normalizeSkillName(rawSkillName);
         if (!skillName) {
           continue;
         }
+        if (isTaskLikeSkillCandidate(rawSkillName) || isTaskLikeSkillCandidate(skillName)) {
+          this.toast("warning", `Skipped non-reusable skill suggestion: ${rawSkillName}`);
+          continue;
+        }
+        const skillDescription = normalizeGeneratedSkillDescription(suggested.description, skillName);
 
         const skillPath = join(skillBaseDir, skillName, "SKILL.md");
         if (!(await exists(skillPath))) {
@@ -3652,7 +3765,7 @@ class AgentCanvasPanel {
             await createSkillFromTemplate({
               baseDirPath: skillBaseDir,
               name: skillName,
-              description: (suggested.description || "Suggested by AI").trim(),
+              description: skillDescription,
               scope: "project"
             });
           } catch (error) {
@@ -3852,6 +3965,51 @@ function normalizeSkillName(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function normalizeGeneratedSkillDescription(description: string | undefined, skillName: string): string {
+  const fallback = `Reusable capability for ${skillName.replace(/-/g, " ")}`;
+  const trimmed = description?.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  if (isTaskLikeSkillCandidate(trimmed) || /\b(todo|task|ticket)\b/i.test(trimmed)) {
+    return fallback;
+  }
+  return trimmed;
+}
+
+function isTaskLikeSkillCandidate(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (/[.!?:;]/.test(trimmed)) {
+    return true;
+  }
+
+  const englishTaskVerbPrefix =
+    /^(build|create|implement|fix|write|add|develop|make|update|refactor|test|deploy|review|analyze|investigate|debug|improve|optimize|setup|configure|migrate|design|document|code)\b/i;
+  const englishTaskVerbSlugPrefix =
+    /^(build|create|implement|fix|write|add|develop|make|update|refactor|test|deploy|review|analyze|investigate|debug|improve|optimize|setup|configure|migrate|design|document|code)(-|$)/;
+  const koreanTaskVerbPrefix = /^(구현|작성|추가|수정|개선|테스트|배포|설정|리팩터링|분석|검토|디버깅)\b/;
+  const koreanTaskVerbSuffix = /(구현|작성|추가|수정|개선|테스트|배포|설정|리팩터링|분석|검토|디버깅)(하기|작업)?$/;
+
+  if (englishTaskVerbPrefix.test(trimmed)) {
+    return true;
+  }
+  if (koreanTaskVerbPrefix.test(trimmed) || koreanTaskVerbSuffix.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.split(/\s+/).filter(Boolean).length >= 8) {
+    return true;
+  }
+
+  const slug = normalizeSkillName(trimmed);
+  if (!slug) {
+    return true;
+  }
+  return englishTaskVerbSlugPrefix.test(slug);
+}
+
 function resolveSkillId(requested: string, skills: DiscoverySnapshot["skills"]): string | undefined {
   const direct = skills.find((skill) => skill.id === requested);
   if (direct) {
@@ -3881,6 +4039,19 @@ function resolveMcpServerId(
 
 function sanitizeRunNodeId(nodeId: string): string {
   return nodeId.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function mapPriorityToValue(priority: TaskSubmissionOptions["priority"] | undefined): number | undefined {
+  if (priority === "high") {
+    return 8;
+  }
+  if (priority === "medium") {
+    return 5;
+  }
+  if (priority === "low") {
+    return 2;
+  }
+  return undefined;
 }
 
 function isTerminalTaskStatus(status: Task["status"]): boolean {

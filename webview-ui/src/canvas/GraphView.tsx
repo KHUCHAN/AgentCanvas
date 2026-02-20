@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from "react";
 import ReactFlow, {
@@ -45,6 +46,7 @@ type GraphViewProps = {
   onToggleSkill: (skillId: string, enabled: boolean) => void;
   onHideNode: (nodeId: string) => void;
   onToggleLibrary: () => void;
+  onAddAgent: () => void;
   onAddCommonRule: () => void;
   onRevealPath: (path: string) => void;
   onExportSkill: (skillId: string) => void;
@@ -65,6 +67,16 @@ type GraphViewProps = {
   onDropPattern: (patternId: string, position: Position) => void;
   onSaveNodePosition: (nodeId: string, position: Position) => void;
   onAgentExpand: (agentId: string) => void;
+  agentExecutionStateById?: Record<
+    string,
+    {
+      state: "idle" | "thinking" | "working" | "error" | "done" | "blocked";
+      currentTask?: string;
+      progress?: number;
+    }
+  >;
+  activeDelegationEdgeIds?: string[];
+  doneDelegationEdgeIds?: string[];
 };
 
 const nodeTypes: NodeTypes = {
@@ -86,6 +98,7 @@ type EdgePalette = {
   agentLink: string;
   delegates: string;
   interaction: string;
+  accent: string;
 };
 
 export default function GraphView(props: GraphViewProps) {
@@ -106,6 +119,7 @@ function GraphCanvas({
   onToggleSkill,
   onHideNode,
   onToggleLibrary,
+  onAddAgent,
   onAddCommonRule,
   onRevealPath,
   onExportSkill,
@@ -125,8 +139,19 @@ function GraphCanvas({
   onAssignMcpToAgent,
   onDropPattern,
   onSaveNodePosition,
-  onAgentExpand
+  onAgentExpand,
+  agentExecutionStateById,
+  activeDelegationEdgeIds,
+  doneDelegationEdgeIds
 }: GraphViewProps) {
+  const activeDelegationSet = useMemo(
+    () => new Set(activeDelegationEdgeIds ?? []),
+    [activeDelegationEdgeIds]
+  );
+  const doneDelegationSet = useMemo(
+    () => new Set(doneDelegationEdgeIds ?? []),
+    [doneDelegationEdgeIds]
+  );
   const reactFlow = useReactFlow();
   const [panModifierActive, setPanModifierActive] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
@@ -147,7 +172,8 @@ function GraphCanvas({
         onOpenCommonRulesFolder,
         onCreateCommonRuleDocs,
         onAssignSkillToAgent,
-        onAssignMcpToAgent
+        onAssignMcpToAgent,
+        agentExecutionStateById
       }),
     [
       hiddenNodeIds,
@@ -165,6 +191,7 @@ function GraphCanvas({
       onRevealPath,
       onSaveNote,
       onToggleSkill,
+      agentExecutionStateById,
       snapshot?.nodes
     ]
   );
@@ -173,17 +200,34 @@ function GraphCanvas({
   const gridDotColor = useMemo(() => resolveGridDotColor(), []);
 
   const mappedEdges = useMemo(
-    () => toFlowEdges(snapshot?.edges ?? [], hiddenNodeIds, edgePalette),
-    [snapshot?.edges, hiddenNodeIds, edgePalette]
+    () =>
+      toFlowEdges(snapshot?.edges ?? [], hiddenNodeIds, edgePalette, {
+        activeDelegationIds: activeDelegationSet,
+        doneDelegationIds: doneDelegationSet
+      }),
+    [snapshot?.edges, hiddenNodeIds, edgePalette, activeDelegationSet, doneDelegationSet]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(mappedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(mappedEdges);
+  const prevVisibleNodeCountRef = useRef(0);
 
   useEffect(() => {
     setNodes(mappedNodes);
     setEdges(mappedEdges);
   }, [mappedEdges, mappedNodes, setEdges, setNodes]);
+
+  useEffect(() => {
+    const previousCount = prevVisibleNodeCountRef.current;
+    const nextCount = mappedNodes.length;
+    prevVisibleNodeCountRef.current = nextCount;
+    if (previousCount > 0 || nextCount === 0) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      reactFlow.fitView({ duration: 180, padding: 0.2 });
+    });
+  }, [mappedNodes.length, reactFlow]);
 
   useEffect(() => {
     if (!selectedNodeId) {
@@ -206,7 +250,7 @@ function GraphCanvas({
   );
 
   const onNodeDoubleClick = useCallback<NodeMouseHandler>(
-    (_event, node) => {
+    (event, node) => {
       const data = node.data as Record<string, unknown>;
       if (typeof data.path === "string" && (node.type === "skill" || node.type === "ruleDoc")) {
         onOpenFile(data.path);
@@ -215,11 +259,17 @@ function GraphCanvas({
         onRevealPath(data.path);
       }
       if (node.type === "agent") {
-        onAgentExpand(String(data.id ?? node.id));
+        const agentId = String(data.id ?? node.id);
+        const agentName = String(data.name ?? "Agent");
+        if (event.altKey || event.metaKey) {
+          onAgentExpand(agentId);
+          return;
+        }
+        onOpenAgentDetail(agentId, agentName);
         return;
       }
     },
-    [onAgentExpand, onOpenFile, onRevealPath]
+    [onAgentExpand, onOpenAgentDetail, onOpenFile, onRevealPath]
   );
 
   const onConnect = useCallback(
@@ -509,6 +559,14 @@ function GraphCanvas({
           +
         </button>
         <button
+          className="canvas-add-agent"
+          onClick={onAddAgent}
+          title="Create agent"
+          aria-label="Create agent"
+        >
+          + Agent
+        </button>
+        <button
           className="canvas-common-rule"
           onClick={onAddCommonRule}
           title="Add common rule"
@@ -570,6 +628,14 @@ function toFlowNodes(
     onCreateCommonRuleDocs: () => void;
     onAssignSkillToAgent: (agentId: string, skillId: string) => void;
     onAssignMcpToAgent: (agentId: string, mcpServerId: string) => void;
+    agentExecutionStateById?: Record<
+      string,
+      {
+        state: "idle" | "thinking" | "working" | "error" | "done" | "blocked";
+        currentTask?: string;
+        progress?: number;
+      }
+    >;
   }
 ): Node[] {
   return nodes
@@ -590,12 +656,16 @@ function toFlowNodes(
       }
 
       if (node.type === "agent") {
+        const runtimeState = handlers.agentExecutionStateById?.[node.id];
         return {
           ...node,
           data: {
             ...node.data,
             onAssignSkill: handlers.onAssignSkillToAgent,
-            onAssignMcp: handlers.onAssignMcpToAgent
+            onAssignMcp: handlers.onAssignMcpToAgent,
+            executionState: runtimeState?.state ?? "idle",
+            currentTask: runtimeState?.currentTask,
+            progress: runtimeState?.progress
           }
         } satisfies Node;
       }
@@ -658,47 +728,73 @@ function toFlowNodes(
 function toFlowEdges(
   edges: DiscoverySnapshot["edges"],
   hiddenNodeIds: Set<string>,
-  palette: EdgePalette
+  palette: EdgePalette,
+  runtime: {
+    activeDelegationIds: Set<string>;
+    doneDelegationIds: Set<string>;
+  }
 ): Edge[] {
   return edges
     .filter((edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target))
-    .map((edge) => ({
-      ...edge,
-      animated: edge.type === "contains" || edge.type === "agentLink" || edge.type === "interaction",
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        width: 18,
-        height: 18,
-        color:
+    .map((edge) => {
+      const isDelegatesActive = edge.type === "delegates" && runtime.activeDelegationIds.has(edge.id);
+      const isDelegatesDone = edge.type === "delegates" && runtime.doneDelegationIds.has(edge.id);
+      return {
+        ...edge,
+        animated:
+          edge.type === "contains" ||
+          edge.type === "agentLink" ||
+          edge.type === "interaction" ||
+          isDelegatesActive,
+        className:
+          edge.type === "delegates"
+            ? [
+              "delegates",
+              isDelegatesActive ? "active" : "",
+              isDelegatesDone ? "done" : ""
+            ]
+              .filter(Boolean)
+              .join(" ")
+            : undefined,
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 18,
+          height: 18,
+          color:
+            edge.type === "overrides"
+              ? palette.overrides
+              : edge.type === "locatedIn"
+                ? palette.locatedIn
+                : edge.type === "appliesTo"
+                  ? palette.appliesTo
+                  : edge.type === "agentLink"
+                    ? palette.agentLink
+                    : edge.type === "delegates"
+                      ? palette.delegates
+                      : edge.type === "interaction"
+                        ? palette.interaction
+                        : palette.contains
+        },
+        style:
           edge.type === "overrides"
-            ? palette.overrides
+            ? { stroke: palette.overrides, strokeWidth: 2, strokeDasharray: "5 3" }
             : edge.type === "locatedIn"
-              ? palette.locatedIn
+              ? { stroke: palette.locatedIn, strokeWidth: 1.5, strokeDasharray: "2 2" }
               : edge.type === "appliesTo"
-                ? palette.appliesTo
+                ? { stroke: palette.appliesTo, strokeWidth: 1.8, strokeDasharray: "4 3" }
                 : edge.type === "agentLink"
-                  ? palette.agentLink
+                  ? { stroke: palette.agentLink, strokeWidth: 2.5, strokeDasharray: "6 4" }
                   : edge.type === "delegates"
-                    ? palette.delegates
+                    ? isDelegatesActive
+                      ? { stroke: palette.accent, strokeWidth: 2.5, strokeDasharray: "8 4" }
+                      : isDelegatesDone
+                        ? { stroke: palette.delegates, strokeWidth: 1.6, opacity: 0.52 }
+                        : { stroke: palette.delegates, strokeWidth: 3 }
                     : edge.type === "interaction"
-                      ? palette.interaction
-                  : palette.contains
-      },
-      style:
-        edge.type === "overrides"
-          ? { stroke: palette.overrides, strokeWidth: 2, strokeDasharray: "5 3" }
-          : edge.type === "locatedIn"
-            ? { stroke: palette.locatedIn, strokeWidth: 1.5, strokeDasharray: "2 2" }
-            : edge.type === "appliesTo"
-              ? { stroke: palette.appliesTo, strokeWidth: 1.8, strokeDasharray: "4 3" }
-              : edge.type === "agentLink"
-                ? { stroke: palette.agentLink, strokeWidth: 2.5, strokeDasharray: "6 4" }
-                : edge.type === "delegates"
-                  ? { stroke: palette.delegates, strokeWidth: 3 }
-                  : edge.type === "interaction"
-                    ? { stroke: palette.interaction, strokeWidth: 2.4, strokeDasharray: "3 3" }
-                : { stroke: palette.contains, strokeWidth: 2 }
-    }));
+                      ? { stroke: palette.interaction, strokeWidth: 2.4, strokeDasharray: "3 3" }
+                      : { stroke: palette.contains, strokeWidth: 2 }
+      };
+    });
 }
 
 function resolveEdgePalette(): EdgePalette {
@@ -710,7 +806,8 @@ function resolveEdgePalette(): EdgePalette {
     appliesTo: style.getPropertyValue("--edge-applies-to").trim() || "#4a87e8",
     agentLink: style.getPropertyValue("--edge-agent-link").trim() || "#4a87e8",
     delegates: style.getPropertyValue("--edge-delegates").trim() || "#e8a64a",
-    interaction: style.getPropertyValue("--edge-interaction").trim() || "#9a6fe8"
+    interaction: style.getPropertyValue("--edge-interaction").trim() || "#9a6fe8",
+    accent: style.getPropertyValue("--accent").trim() || "#2fa184"
   };
 }
 

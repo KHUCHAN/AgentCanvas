@@ -407,6 +407,11 @@ export type SessionContext = {
   scopeId?: string;
 };
 
+export type TaskSubmissionOptions = {
+  priority?: "high" | "medium" | "low";
+  assignTo?: string | "auto";
+};
+
 export type TaskStatus =
   | "planned"
   | "ready"
@@ -636,6 +641,8 @@ export type WebviewToExtensionMessage =
         backendId?: CliBackendId;
         runName?: string;
         tags?: string[];
+        instruction?: string;
+        taskOptions?: TaskSubmissionOptions;
         usePinnedOutputs?: boolean;
         session?: SessionContext;
       }

@@ -50,6 +50,13 @@ const structureSchema = z.object({
     .optional()
 });
 
+const ENGLISH_TASK_VERB_PREFIX =
+  /^(build|create|implement|fix|write|add|develop|make|update|refactor|test|deploy|review|analyze|investigate|debug|improve|optimize|setup|configure|migrate|design|document|code)\b/i;
+const ENGLISH_TASK_VERB_SLUG_PREFIX =
+  /^(build|create|implement|fix|write|add|develop|make|update|refactor|test|deploy|review|analyze|investigate|debug|improve|optimize|setup|configure|migrate|design|document|code)(-|$)/;
+const KOREAN_TASK_VERB_PREFIX = /^(구현|작성|추가|수정|개선|테스트|배포|설정|리팩터링|분석|검토|디버깅)\b/;
+const KOREAN_TASK_VERB_SUFFIX = /(구현|작성|추가|수정|개선|테스트|배포|설정|리팩터링|분석|검토|디버깅)(하기|작업)?$/;
+
 export function parseAgentStructure(rawOutput: string): GeneratedAgentStructure {
   const jsonText = extractJson(rawOutput);
   const parsed = structureSchema.parse(JSON.parse(jsonText));
@@ -69,16 +76,13 @@ export function parseAgentStructure(rawOutput: string): GeneratedAgentStructure 
   }));
 
   ensureSingleOrchestrator(agents);
+  const suggestedNewSkills = normalizeSuggestedSkills(parsed.suggestedNewSkills ?? []);
 
   return {
     teamName: trimOptional(parsed.teamName) || "Generated Team",
     teamDescription: trimOptional(parsed.teamDescription) || "AI generated team structure",
     agents,
-    suggestedNewSkills: (parsed.suggestedNewSkills ?? []).map((item) => ({
-      name: item.name.trim(),
-      description: trimOptional(item.description) || "Suggested by AI",
-      forAgent: trimOptional(item.forAgent) || ""
-    })),
+    suggestedNewSkills,
     suggestedNewMcpServers: (parsed.suggestedNewMcpServers ?? []).map((item) => ({
       name: item.name.trim(),
       kind: item.kind ?? "stdio",
@@ -150,4 +154,97 @@ function dedupeArray(values: string[] | undefined): string[] {
     return [];
   }
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizeSuggestedSkills(
+  items: Array<{ name: string; description?: string; forAgent?: string }>
+): GeneratedAgentStructure["suggestedNewSkills"] {
+  const dedupe = new Set<string>();
+  const result: GeneratedAgentStructure["suggestedNewSkills"] = [];
+
+  for (const item of items) {
+    const rawName = item.name.trim();
+    if (!rawName) {
+      continue;
+    }
+    const normalizedName = normalizeSuggestedSkillName(rawName);
+    if (!normalizedName) {
+      continue;
+    }
+    if (isLikelyTaskSkillName(rawName) || isLikelyTaskSkillName(normalizedName)) {
+      continue;
+    }
+    if (dedupe.has(normalizedName)) {
+      continue;
+    }
+    dedupe.add(normalizedName);
+
+    result.push({
+      name: normalizedName,
+      description: normalizeSuggestedSkillDescription(item.description, normalizedName),
+      forAgent: trimOptional(item.forAgent) || ""
+    });
+  }
+
+  return result;
+}
+
+function normalizeSuggestedSkillName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[`"'“”‘’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeSuggestedSkillDescription(description: string | undefined, skillName: string): string {
+  const fallback = `Reusable capability for ${skillName.replace(/-/g, " ")}`;
+  const trimmed = trimOptional(description);
+  if (!trimmed) {
+    return fallback;
+  }
+  if (isLikelyTaskDescription(trimmed)) {
+    return fallback;
+  }
+  return trimmed;
+}
+
+function isLikelyTaskSkillName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (/[.!?:;]/.test(trimmed)) {
+    return true;
+  }
+  if (ENGLISH_TASK_VERB_PREFIX.test(trimmed)) {
+    return true;
+  }
+  if (KOREAN_TASK_VERB_PREFIX.test(trimmed) || KOREAN_TASK_VERB_SUFFIX.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.split(/\s+/).filter(Boolean).length >= 8) {
+    return true;
+  }
+  const normalized = normalizeSuggestedSkillName(trimmed);
+  if (!normalized) {
+    return true;
+  }
+  return ENGLISH_TASK_VERB_SLUG_PREFIX.test(normalized);
+}
+
+function isLikelyTaskDescription(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (ENGLISH_TASK_VERB_PREFIX.test(trimmed)) {
+    return true;
+  }
+  if (KOREAN_TASK_VERB_PREFIX.test(trimmed) || KOREAN_TASK_VERB_SUFFIX.test(trimmed)) {
+    return true;
+  }
+  return /\b(todo|task|ticket)\b/i.test(trimmed);
 }

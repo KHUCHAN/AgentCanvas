@@ -23,6 +23,7 @@ import type {
   SessionContext,
   SkillPackPreview,
   TaskEvent,
+  TaskSubmissionOptions,
   TaskStatus
 } from "../types";
 
@@ -155,6 +156,8 @@ export type WebviewToExtensionMessage =
         backendId?: CliBackendId;
         runName?: string;
         tags?: string[];
+        instruction?: string;
+        taskOptions?: TaskSubmissionOptions;
         usePinnedOutputs?: boolean;
         session?: SessionContext;
       }

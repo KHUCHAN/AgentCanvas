@@ -118,7 +118,28 @@ function testAgentStructureParser() {
           assignedMcpServerIds: []
         }
       ],
-      suggestedNewSkills: [],
+      suggestedNewSkills: [
+        {
+          name: 'Implement login page',
+          description: 'Build login page and connect auth',
+          forAgent: 'Reviewer'
+        },
+        {
+          name: 'API Schema Validator',
+          description: 'Reusable validation for request/response contracts',
+          forAgent: 'Reviewer'
+        },
+        {
+          name: '구현 작업',
+          description: '기능 구현',
+          forAgent: 'Lead'
+        },
+        {
+          name: 'api-schema-validator',
+          description: 'duplicate capability',
+          forAgent: 'Lead'
+        }
+      ],
       suggestedNewMcpServers: []
     }),
     '```'
@@ -127,6 +148,9 @@ function testAgentStructureParser() {
   const parsed = parseAgentStructure(raw);
   assert.equal(parsed.agents.length, 2, 'expected two agents');
   assert.equal(parsed.agents[0].isOrchestrator, true, 'first agent should be orchestrator');
+  assert.equal(parsed.suggestedNewSkills.length, 1, 'task-like or duplicate suggested skills should be filtered');
+  assert.equal(parsed.suggestedNewSkills[0].name, 'api-schema-validator');
+  assert.equal(parsed.suggestedNewSkills[0].forAgent, 'Reviewer');
 }
 
 async function testPromptHistoryRoundtrip() {

@@ -416,6 +416,11 @@ export interface SessionContext {
   scopeId?: string;
 }
 
+export type TaskSubmissionOptions = {
+  priority?: "high" | "medium" | "low";
+  assignTo?: string | "auto";
+};
+
 export type TaskStatus =
   | "planned"
   | "ready"

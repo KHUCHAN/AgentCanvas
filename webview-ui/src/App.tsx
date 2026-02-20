@@ -33,9 +33,11 @@ import type {
   StudioNode,
   SkillPackPreview,
   Task,
-  TaskEvent
+  TaskEvent,
+  TaskSubmissionOptions
 } from "./messaging/protocol";
 import type { PatternIndexItem, PatternTemplate } from "./patterns/types";
+import BuildPromptBar from "./components/BuildPromptBar";
 import AgentDetailModal from "./panels/AgentDetailModal";
 import AgentCreationModal from "./panels/AgentCreationModal";
 import AgentPreviewModal from "./panels/AgentPreviewModal";
@@ -52,8 +54,8 @@ import logo from "./assets/agentcanvas_icon_28.png";
 import toastInfoIcon from "./assets/micro/agentcanvas_micro_toast_info.svg";
 import toastWarnIcon from "./assets/micro/agentcanvas_micro_toast_warn.svg";
 import toastErrorIcon from "./assets/micro/agentcanvas_micro_toast_error.svg";
-import BuildPrompt from "./views/BuildPrompt";
 import KanbanView from "./views/KanbanView";
+import type { TaskPanelOptions } from "./panels/TaskPanel";
 
 type ScheduleRunState = {
   tasks: Task[];
@@ -101,8 +103,8 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<DiscoverySnapshot>();
   const [selectedNode, setSelectedNode] = useState<Node>();
   const [selectedEdge, setSelectedEdge] = useState<Edge>();
-  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "prompt" | "run" | "memory">("library");
-  const [canvasMode, setCanvasMode] = useState<"kanban" | "graph" | "schedule">("kanban");
+  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "task" | "run">("library");
+  const [canvasMode, setCanvasMode] = useState<"kanban" | "graph" | "schedule">("graph");
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [hiddenNodeIds, setHiddenNodeIds] = useState<Set<string>>(new Set());
@@ -128,6 +130,11 @@ export default function App() {
     message: string;
     progress?: number;
   }>();
+  const [buildPromptText, setBuildPromptText] = useState("");
+  const [buildPromptBackendId, setBuildPromptBackendId] = useState<CliBackend["id"]>("auto");
+  const [buildPromptIncludeExistingAgents, setBuildPromptIncludeExistingAgents] = useState(true);
+  const [buildPromptIncludeExistingSkills, setBuildPromptIncludeExistingSkills] = useState(true);
+  const [buildPromptIncludeExistingMcpServers, setBuildPromptIncludeExistingMcpServers] = useState(true);
   const [generatedPreview, setGeneratedPreview] = useState<{
     structure: GeneratedAgentStructure;
     historyId?: string;
@@ -345,6 +352,9 @@ export default function App() {
     const edges = composedSnapshot.edges;
     if (!expandedAgentId) {
       const allowed = nodes.filter((node) => baseTypes.has(node.type));
+      if (allowed.length === 0) {
+        return composedSnapshot;
+      }
       const allowedIds = new Set(allowed.map((node) => node.id));
       return {
         ...composedSnapshot,
@@ -373,6 +383,9 @@ export default function App() {
       const owner = String((node.data as Record<string, unknown> | undefined)?.ownerAgentId ?? "");
       return owner === expandedAgentId;
     });
+    if (allowed.length === 0) {
+      return composedSnapshot;
+    }
     const allowedIds = new Set(allowed.map((node) => node.id));
     return {
       ...composedSnapshot,
@@ -429,7 +442,7 @@ export default function App() {
     );
   }, [patternNodes.length, promptHistory, runHistory.length, snapshot?.agents]);
 
-  const showBuildPrompt = forceBuildPrompt || !hasTeamReady;
+  const buildPromptExpanded = forceBuildPrompt || !hasTeamReady;
 
   const runSummary = useMemo(() => {
     const total = scheduleViewState.tasks.length;
@@ -859,7 +872,7 @@ export default function App() {
           historyId: result.historyEntry?.id
         });
       }
-      setPanelMode("prompt");
+      setPanelMode("inspector");
       setPanelOpen(true);
     } catch (error) {
       showErrorToast(error);
@@ -867,6 +880,20 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const buildTeamFromPromptBar = async () => {
+    const prompt = buildPromptText.trim();
+    if (!prompt || busy) {
+      return;
+    }
+    await generateAgentStructure({
+      prompt,
+      backendId: buildPromptBackendId,
+      includeExistingAgents: buildPromptIncludeExistingAgents,
+      includeExistingSkills: buildPromptIncludeExistingSkills,
+      includeExistingMcpServers: buildPromptIncludeExistingMcpServers
+    });
   };
 
   const applyGeneratedStructure = async (payload: {
@@ -1035,16 +1062,6 @@ export default function App() {
     [refreshDiscovery, refreshMemory, showErrorToast]
   );
 
-  useEffect(() => {
-    if (panelMode !== "memory" || !panelOpen) {
-      return;
-    }
-    if (memoryItems.length > 0 || memoryCommits.length > 0) {
-      return;
-    }
-    void refreshMemory().catch(() => undefined);
-  }, [memoryCommits.length, memoryItems.length, panelMode, panelOpen, refreshMemory]);
-
   const insertInteractionPattern = async (patternId: string, anchor?: Position) => {
     setBusy(true);
     try {
@@ -1167,7 +1184,7 @@ export default function App() {
             }
           }
           : edge
-        )
+      )
     );
     if (update.data && typeof (update.data as { termination?: unknown }).termination === "object") {
       postToExtension({
@@ -1292,6 +1309,16 @@ export default function App() {
     }
   }, [defaultBackendId, promptBackends]);
 
+  useEffect(() => {
+    if (promptBackends.length === 0) {
+      return;
+    }
+    if (promptBackends.some((backend) => backend.id === buildPromptBackendId)) {
+      return;
+    }
+    setBuildPromptBackendId(promptBackends[0].id);
+  }, [buildPromptBackendId, promptBackends]);
+
   const runFlowFromPanel = async (payload: {
     flowName: string;
     backendId: CliBackend["id"];
@@ -1299,6 +1326,8 @@ export default function App() {
     session?: SessionContext;
     runName?: string;
     tags?: string[];
+    instruction?: string;
+    taskOptions?: TaskSubmissionOptions;
   }) => {
     setBusy(true);
     try {
@@ -1314,7 +1343,9 @@ export default function App() {
           usePinnedOutputs: payload.usePinnedOutputs,
           session: payload.session,
           runName: payload.runName,
-          tags: payload.tags
+          tags: payload.tags,
+          instruction: payload.instruction,
+          taskOptions: payload.taskOptions
         }
       });
       setActiveFlowName(result.flowName);
@@ -1332,6 +1363,31 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const runTaskFromPanel = async (prompt: string, options: TaskPanelOptions) => {
+    const instruction = prompt.trim();
+    if (!instruction) {
+      return;
+    }
+    setSelectedScheduleTaskId(undefined);
+    const tags = [
+      `priority:${options.priority}`,
+      options.assignTo !== "auto" ? `assign:${options.assignTo}` : "assign:auto"
+    ];
+    await runFlowFromPanel({
+      flowName: activeFlowName || "default",
+      backendId: defaultBackendId,
+      usePinnedOutputs: true,
+      session: { scope: "workspace" },
+      runName: instruction.slice(0, 72),
+      tags,
+      instruction,
+      taskOptions: options
+    });
+    setPanelMode("task");
+    setCanvasMode("graph");
+    setPanelOpen(true);
   };
 
   const runNodeFromPanel = async (payload: {
@@ -1542,6 +1598,16 @@ export default function App() {
     }).catch(showErrorToast);
   };
 
+  const cancelTaskFromPanel = (taskId: string) => {
+    setScheduleTaskStatus(taskId, "canceled");
+  };
+
+  const viewTaskDetailFromPanel = (taskId: string) => {
+    setSelectedScheduleTaskId(taskId);
+    setPanelMode("run");
+    setPanelOpen(true);
+  };
+
   const refreshCacheMetrics = useCallback(async () => {
     const result = await requestToExtension<{ metrics: CacheMetrics }>({
       type: "GET_CACHE_METRICS",
@@ -1645,8 +1711,8 @@ export default function App() {
     },
     {
       id: "build-team",
-      title: "Build team prompt",
-      subtitle: "Open prompt-first build screen",
+      title: "Open build prompt",
+      subtitle: "Show expanded build prompt overlay",
       run: () => setForceBuildPrompt(true)
     },
     {
@@ -1699,11 +1765,11 @@ export default function App() {
       run: () => setPanelOpen((open) => !open)
     },
     {
-      id: "panel-memory",
-      title: "Open memory panel",
-      subtitle: "Inspect shared memory and commits",
+      id: "panel-task",
+      title: "Open task panel",
+      subtitle: "Submit work and monitor active tasks",
       run: () => {
-        setPanelMode("memory");
+        setPanelMode("task");
         setPanelOpen(true);
       }
     },
@@ -1815,6 +1881,112 @@ export default function App() {
     }
   ];
 
+  const agentExecutionStateById = useMemo(() => {
+    const agentIds = new Set<string>(snapshot?.agents.map((agent) => agent.id) ?? []);
+    for (const node of graphSnapshot?.nodes ?? []) {
+      if (node.type === "agent") {
+        agentIds.add(node.id);
+      }
+    }
+
+    const tasksByAgentId = new Map<string, Task[]>();
+    for (const task of scheduleViewState.tasks) {
+      const bucket = tasksByAgentId.get(task.agentId);
+      if (bucket) {
+        bucket.push(task);
+      } else {
+        tasksByAgentId.set(task.agentId, [task]);
+      }
+    }
+
+    const result: Record<
+      string,
+      {
+        state: "idle" | "thinking" | "working" | "error" | "done" | "blocked";
+        currentTask?: string;
+        progress?: number;
+      }
+    > = {};
+
+    for (const agentId of agentIds) {
+      const tasks = tasksByAgentId.get(agentId) ?? [];
+      if (tasks.length === 0) {
+        result[agentId] = { state: "idle" };
+        continue;
+      }
+
+      const running = tasks.find((task) => task.status === "running");
+      if (running) {
+        result[agentId] = {
+          state: "working",
+          currentTask: running.title,
+          progress: normalizeProgressPercent(running.progress)
+        };
+        continue;
+      }
+
+      const failed = tasks.find((task) => task.status === "failed");
+      if (failed) {
+        result[agentId] = {
+          state: "error",
+          currentTask: failed.title
+        };
+        continue;
+      }
+
+      const blocked = tasks.find((task) => task.status === "blocked");
+      if (blocked) {
+        result[agentId] = {
+          state: "blocked",
+          currentTask: blocked.title
+        };
+        continue;
+      }
+
+      const pending = tasks.find((task) => task.status === "planned" || task.status === "ready");
+      if (pending) {
+        result[agentId] = {
+          state: "thinking",
+          currentTask: pending.title
+        };
+        continue;
+      }
+
+      const done = tasks.find((task) => task.status === "done" || task.status === "canceled");
+      if (done) {
+        result[agentId] = {
+          state: "done",
+          currentTask: done.title,
+          progress: 100
+        };
+        continue;
+      }
+
+      result[agentId] = { state: "idle" };
+    }
+
+    return result;
+  }, [graphSnapshot?.nodes, scheduleViewState.tasks, snapshot?.agents]);
+
+  const delegationEdgeState = useMemo(() => {
+    const active: string[] = [];
+    const done: string[] = [];
+    for (const edge of graphSnapshot?.edges ?? []) {
+      if (edge.type !== "delegates") {
+        continue;
+      }
+      const targetState = agentExecutionStateById[edge.target]?.state;
+      if (targetState === "working" || targetState === "thinking") {
+        active.push(edge.id);
+        continue;
+      }
+      if (targetState === "done") {
+        done.push(edge.id);
+      }
+    }
+    return { active, done };
+  }, [agentExecutionStateById, graphSnapshot?.edges]);
+
   return (
     <div className="studio-shell">
       <section className="main-section">
@@ -1825,7 +1997,7 @@ export default function App() {
               className="brand-home-button"
               onClick={() => {
                 setForceBuildPrompt(true);
-                setCanvasMode("kanban");
+                setCanvasMode("graph");
               }}
             >
               <img src={logo} className="brand-home-logo" alt="" />
@@ -1835,7 +2007,7 @@ export default function App() {
           </div>
 
           <div className="top-actions">
-            {!showBuildPrompt && (
+            {!panelOpen && (
               <div className="view-toggle" role="tablist" aria-label="Panel mode">
                 <button
                   type="button"
@@ -1861,14 +2033,14 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className={panelMode === "prompt" ? "active-toggle" : ""}
-                  title="AI Prompt"
+                  className={panelMode === "task" ? "active-toggle" : ""}
+                  title="Task"
                   onClick={() => {
-                    setPanelMode("prompt");
+                    setPanelMode("task");
                     setPanelOpen(true);
                   }}
                 >
-                  AI Prompt
+                  Task
                 </button>
                 <button
                   type="button"
@@ -1881,204 +2053,196 @@ export default function App() {
                 >
                   Run
                 </button>
-                <button
-                  type="button"
-                  className={panelMode === "memory" ? "active-toggle" : ""}
-                  title="Memory"
-                  onClick={() => {
-                    setPanelMode("memory");
-                    setPanelOpen(true);
-                  }}
-                >
-                  Memory
-                </button>
               </div>
             )}
-            {!showBuildPrompt && (
-              <div className="view-toggle" role="tablist" aria-label="View mode">
-                <button
-                  type="button"
-                  className={canvasMode === "kanban" ? "active-toggle" : ""}
-                  title="Kanban"
-                  onClick={() => setCanvasMode("kanban")}
-                >
-                  Kanban
-                </button>
-                <button
-                  type="button"
-                  className={canvasMode === "graph" ? "active-toggle" : ""}
-                  title="Graph"
-                  onClick={() => setCanvasMode("graph")}
-                >
-                  Graph
-                </button>
-                <button
-                  type="button"
-                  className={canvasMode === "schedule" ? "active-toggle" : ""}
-                  title="Schedule"
-                  onClick={() => setCanvasMode("schedule")}
-                >
-                  Schedule
-                </button>
-              </div>
-            )}
+            <div className="view-toggle" role="tablist" aria-label="View mode">
+              <button
+                type="button"
+                className={canvasMode === "kanban" ? "active-toggle" : ""}
+                title="Kanban"
+                onClick={() => setCanvasMode("kanban")}
+              >
+                Kanban
+              </button>
+              <button
+                type="button"
+                className={canvasMode === "graph" ? "active-toggle" : ""}
+                title="Graph"
+                onClick={() => setCanvasMode("graph")}
+              >
+                Graph
+              </button>
+              <button
+                type="button"
+                className={canvasMode === "schedule" ? "active-toggle" : ""}
+                title="Schedule"
+                onClick={() => setCanvasMode("schedule")}
+              >
+                Schedule
+              </button>
+            </div>
             <button type="button" title="Cmd/Ctrl+," onClick={() => setSettingsOpen(true)}>Settings</button>
             <button type="button" title="Cmd/Ctrl+K" onClick={() => setCommandBarOpen(true)}>Command Bar</button>
           </div>
         </header>
 
-        <div className={`workspace-body ${showBuildPrompt ? "is-build-mode" : "is-team-mode"}`}>
-          {showBuildPrompt ? (
-            <BuildPrompt
-              backends={promptBackends}
-              busy={busy}
-              progress={generationProgress}
-              onBuild={generateAgentStructure}
+        <div className={`workspace-body ${panelOpen ? "is-team-mode" : ""}`}>
+          <div className="workspace-main">
+            <div className="canvas-area">
+              {canvasMode === "kanban" && (
+                <ErrorBoundary section="KanbanView">
+                  <KanbanView
+                    runId={scheduleRunId}
+                    tasks={scheduleViewState.tasks}
+                    agents={snapshot?.agents ?? []}
+                    selectedTaskId={selectedScheduleTaskId}
+                    onSelectTask={setSelectedScheduleTaskId}
+                    onSetTaskStatus={setScheduleTaskStatus}
+                    onPinTask={pinScheduleTask}
+                  />
+                </ErrorBoundary>
+              )}
+
+              {canvasMode === "graph" && (
+                <ErrorBoundary section="GraphView">
+                  <GraphView
+                    snapshot={graphSnapshot}
+                    hiddenNodeIds={hiddenNodeIds}
+                    onSelectNode={(node) => {
+                      setSelectedNode(node);
+                      setSelectedEdge(undefined);
+                      setPanelMode("inspector");
+                      setPanelOpen(true);
+                    }}
+                    onSelectEdge={(edge) => {
+                      setSelectedEdge(edge);
+                      setSelectedNode(undefined);
+                      setPanelMode("inspector");
+                      setPanelOpen(true);
+                    }}
+                    onOpenFile={openFile}
+                    onCreateOverride={createOverride}
+                    onToggleSkill={toggleSkillEnabled}
+                    onHideNode={hideNode}
+                    onRevealPath={revealPath}
+                    onExportSkill={(skillId) => exportSkills([skillId])}
+                    onToggleLibrary={() => setCommandBarOpen(true)}
+                    onAddCommonRule={() => setCommonRuleModalOpen(true)}
+                    onAddAgent={() => setAgentCreationOpen(true)}
+                    onToggleCommandBar={() => setCommandBarOpen(true)}
+                    onCreateNote={addNote}
+                    onSaveNote={saveNote}
+                    onDeleteNote={deleteNote}
+                    onDuplicateNote={(text, position) => addNote(position, text)}
+                    onScanWorkspace={refreshDiscovery}
+                    onImportPack={requestImportPreview}
+                    onEnsureRootAgents={ensureRootAgents}
+                    onOpenCommonRulesFolder={openCommonRulesFolder}
+                    onCreateCommonRuleDocs={createCommonRuleDocs}
+                    onAddAgentLink={addAgentLink}
+                    onOpenAgentDetail={(agentId, agentName) =>
+                      setAgentDetailModal({ agentId, agentName })
+                    }
+                    onAssignSkillToAgent={assignSkillToAgent}
+                    onAssignMcpToAgent={assignMcpToAgent}
+                    onDropPattern={(patternId, position) => {
+                      void insertInteractionPattern(patternId, position).catch(() => undefined);
+                    }}
+                    onSaveNodePosition={saveNodePosition}
+                    onAgentExpand={(agentId) =>
+                      setExpandedAgentId((current) => (current === agentId ? null : agentId))
+                    }
+                    agentExecutionStateById={agentExecutionStateById}
+                    activeDelegationEdgeIds={delegationEdgeState.active}
+                    doneDelegationEdgeIds={delegationEdgeState.done}
+                  />
+                </ErrorBoundary>
+              )}
+
+              {canvasMode === "schedule" && (
+                <ErrorBoundary section="ScheduleView">
+                  <ScheduleView
+                    runId={scheduleRunId}
+                    tasks={scheduleViewState.tasks}
+                    agents={snapshot?.agents ?? []}
+                    nowMs={scheduleViewState.nowMs}
+                    selectedTaskId={selectedScheduleTaskId}
+                    onSelectTask={setSelectedScheduleTaskId}
+                    onMoveTask={moveScheduleTask}
+                    onPinTask={pinScheduleTask}
+                  />
+                </ErrorBoundary>
+              )}
+
+              <BuildPromptBar
+                hasTeam={hasTeamReady}
+                expanded={buildPromptExpanded}
+                prompt={buildPromptText}
+                onPromptChange={setBuildPromptText}
+                onBuildTeam={() => void buildTeamFromPromptBar()}
+                backends={promptBackends}
+                selectedBackend={buildPromptBackendId}
+                onBackendChange={setBuildPromptBackendId}
+                isBuilding={busy}
+                progress={generationProgress}
+                includeExistingAgents={buildPromptIncludeExistingAgents}
+                includeExistingSkills={buildPromptIncludeExistingSkills}
+                includeExistingMcpServers={buildPromptIncludeExistingMcpServers}
+                onIncludeExistingAgentsChange={setBuildPromptIncludeExistingAgents}
+                onIncludeExistingSkillsChange={setBuildPromptIncludeExistingSkills}
+                onIncludeExistingMcpServersChange={setBuildPromptIncludeExistingMcpServers}
+                onExpand={() => setForceBuildPrompt(true)}
+                onCollapse={() => setForceBuildPrompt(false)}
+              />
+            </div>
+          </div>
+          <ErrorBoundary section="RightPanel">
+            <RightPanel
+              mode={panelMode}
+              open={panelOpen}
+              saveSignal={saveSignal}
+              snapshot={composedSnapshot}
+              selectedNode={selectedNode}
+              selectedScheduleTaskId={selectedScheduleTaskId}
+              selectedEdge={selectedEdge}
+              onModeChange={setPanelMode}
+              onOpenFile={openFile}
+              onRevealPath={revealPath}
+              onCreateSkill={createSkill}
+              onExportSkills={exportSkills}
+              onValidateSkill={validateSkill}
+              onCreateOverride={createOverride}
+              onSaveSkillFrontmatter={saveSkillFrontmatter}
+              interactionPatterns={interactionPatterns}
+              onInsertPattern={(patternId) => insertInteractionPattern(patternId)}
+              onUpdateInteractionEdge={(edgeId, update) => updateInteractionEdge(edgeId, update)}
+              activeFlowName={activeFlowName}
+              tasks={scheduleViewState.tasks}
+              onRunTask={runTaskFromPanel}
+              onCancelTask={cancelTaskFromPanel}
+              onViewTaskDetail={viewTaskDetailFromPanel}
+              runBackends={promptBackends}
+              backendOverrides={backendOverrides}
+              defaultBackendId={defaultBackendId}
+              runHistory={runHistory}
+              runEvents={runEvents}
+              activeRunId={activeRunId}
+              selectedRunId={selectedRunId}
+              selectedScheduleTask={selectedScheduleTask}
+              onRunFlow={runFlowFromPanel}
+              onRunNode={runNodeFromPanel}
+              onReplayRun={replayRunFromPanel}
+              onStopRun={stopRunFromPanel}
+              onRefreshRunHistory={refreshRunHistory}
+              onSelectRun={selectRun}
+              onPinOutput={pinOutput}
+              onUnpinOutput={unpinOutput}
+              onSetBackendOverrides={setBackendOverrides}
+              onSetDefaultBackend={setDefaultBackend}
+              onTestBackend={testBackendFromPanel}
+              onOpenRunLog={openRunLog}
             />
-          ) : (
-            <>
-              <div className="workspace-main">
-                {canvasMode === "kanban" && (
-                  <ErrorBoundary section="KanbanView">
-                    <KanbanView
-                      runId={scheduleRunId}
-                      tasks={scheduleViewState.tasks}
-                      agents={snapshot?.agents ?? []}
-                      selectedTaskId={selectedScheduleTaskId}
-                      onSelectTask={setSelectedScheduleTaskId}
-                      onSetTaskStatus={setScheduleTaskStatus}
-                      onPinTask={pinScheduleTask}
-                    />
-                  </ErrorBoundary>
-                )}
-
-                {canvasMode === "graph" && (
-                  <ErrorBoundary section="GraphView">
-                    <GraphView
-                      snapshot={graphSnapshot}
-                      hiddenNodeIds={hiddenNodeIds}
-                      onSelectNode={(node) => {
-                        setSelectedNode(node);
-                        setSelectedEdge(undefined);
-                        setPanelMode("inspector");
-                        setPanelOpen(true);
-                      }}
-                      onSelectEdge={(edge) => {
-                        setSelectedEdge(edge);
-                        setSelectedNode(undefined);
-                        setPanelMode("inspector");
-                        setPanelOpen(true);
-                      }}
-                      onOpenFile={openFile}
-                      onCreateOverride={createOverride}
-                      onToggleSkill={toggleSkillEnabled}
-                      onHideNode={hideNode}
-                      onRevealPath={revealPath}
-                      onExportSkill={(skillId) => exportSkills([skillId])}
-                      onToggleLibrary={() => setCommandBarOpen(true)}
-                      onAddCommonRule={() => setCommonRuleModalOpen(true)}
-                      onToggleCommandBar={() => setCommandBarOpen(true)}
-                      onCreateNote={addNote}
-                      onSaveNote={saveNote}
-                      onDeleteNote={deleteNote}
-                      onDuplicateNote={(text, position) => addNote(position, text)}
-                      onScanWorkspace={refreshDiscovery}
-                      onImportPack={requestImportPreview}
-                      onEnsureRootAgents={ensureRootAgents}
-                      onOpenCommonRulesFolder={openCommonRulesFolder}
-                      onCreateCommonRuleDocs={createCommonRuleDocs}
-                      onAddAgentLink={addAgentLink}
-                      onOpenAgentDetail={(agentId, agentName) =>
-                        setAgentDetailModal({ agentId, agentName })
-                      }
-                      onAssignSkillToAgent={assignSkillToAgent}
-                      onAssignMcpToAgent={assignMcpToAgent}
-                      onDropPattern={(patternId, position) => {
-                        void insertInteractionPattern(patternId, position).catch(() => undefined);
-                      }}
-                      onSaveNodePosition={saveNodePosition}
-                      onAgentExpand={(agentId) =>
-                        setExpandedAgentId((current) => (current === agentId ? null : agentId))
-                      }
-                    />
-                  </ErrorBoundary>
-                )}
-
-                {canvasMode === "schedule" && (
-                  <ErrorBoundary section="ScheduleView">
-                    <ScheduleView
-                      runId={scheduleRunId}
-                      tasks={scheduleViewState.tasks}
-                      agents={snapshot?.agents ?? []}
-                      nowMs={scheduleViewState.nowMs}
-                      selectedTaskId={selectedScheduleTaskId}
-                      onSelectTask={setSelectedScheduleTaskId}
-                      onMoveTask={moveScheduleTask}
-                      onPinTask={pinScheduleTask}
-                    />
-                  </ErrorBoundary>
-                )}
-              </div>
-              <ErrorBoundary section="RightPanel">
-                <RightPanel
-                  mode={panelMode}
-                  open={panelOpen}
-                  saveSignal={saveSignal}
-                  snapshot={composedSnapshot}
-                  selectedNode={selectedNode}
-                  selectedScheduleTaskId={selectedScheduleTaskId}
-                  selectedEdge={selectedEdge}
-                  onModeChange={setPanelMode}
-                  onOpenFile={openFile}
-                  onRevealPath={revealPath}
-                  onCreateSkill={createSkill}
-                  onExportSkills={exportSkills}
-                  onValidateSkill={validateSkill}
-                  onCreateOverride={createOverride}
-                  onSaveSkillFrontmatter={saveSkillFrontmatter}
-                  promptBackends={promptBackends}
-                  promptHistory={promptHistory}
-                  generationProgress={generationProgress}
-                  onRefreshPromptTools={refreshPromptTools}
-                  onGenerateAgentStructure={generateAgentStructure}
-                  onDeletePromptHistory={deletePromptHistory}
-                  onReapplyPromptHistory={reapplyPromptHistory}
-                  interactionPatterns={interactionPatterns}
-                  onInsertPattern={(patternId) => insertInteractionPattern(patternId)}
-                  onUpdateInteractionEdge={(edgeId, update) => updateInteractionEdge(edgeId, update)}
-                  activeFlowName={activeFlowName}
-                  runBackends={promptBackends}
-                  backendOverrides={backendOverrides}
-                  defaultBackendId={defaultBackendId}
-                  runHistory={runHistory}
-                  runEvents={runEvents}
-                  activeRunId={activeRunId}
-                  selectedRunId={selectedRunId}
-                  selectedScheduleTask={selectedScheduleTask}
-                  onRunFlow={runFlowFromPanel}
-                  onRunNode={runNodeFromPanel}
-                  onReplayRun={replayRunFromPanel}
-                  onStopRun={stopRunFromPanel}
-                  onRefreshRunHistory={refreshRunHistory}
-                  onSelectRun={selectRun}
-                  onPinOutput={pinOutput}
-                  onUnpinOutput={unpinOutput}
-                  onSetBackendOverrides={setBackendOverrides}
-                  onSetDefaultBackend={setDefaultBackend}
-                  onTestBackend={testBackendFromPanel}
-                  onOpenRunLog={openRunLog}
-                  memoryItems={memoryItems}
-                  memoryCommits={memoryCommits}
-                  memoryQueryResult={memoryQueryResult}
-                  onRefreshMemory={refreshMemory}
-                  onSearchMemory={searchMemory}
-                  onAddMemoryItem={addMemoryItem}
-                  onSupersedeMemory={supersedeMemory}
-                  onCheckoutMemory={checkoutMemory}
-                />
-              </ErrorBoundary>
-            </>
-          )}
+          </ErrorBoundary>
         </div>
 
         <StatusBar
@@ -2099,10 +2263,9 @@ export default function App() {
           contextUsed={contextUsed}
           contextThreshold={cacheConfig.contextThreshold}
           contextState={contextState}
-          showBuildNew={!showBuildPrompt}
+          showBuildNew={!buildPromptExpanded}
           onBuildNew={() => {
             setForceBuildPrompt(true);
-            setCanvasMode("kanban");
           }}
         />
       </section>
@@ -2228,6 +2391,14 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function normalizeProgressPercent(progress?: number): number | undefined {
+  if (typeof progress !== "number" || Number.isNaN(progress)) {
+    return undefined;
+  }
+  const value = progress <= 1 ? progress * 100 : progress;
+  return Math.max(0, Math.min(100, value));
 }
 
 function applyTaskEvent(tasks: Task[], event: TaskEvent): Task[] {

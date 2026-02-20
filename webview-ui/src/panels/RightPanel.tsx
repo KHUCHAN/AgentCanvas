@@ -4,34 +4,28 @@ import type {
   CliBackend,
   CliBackendOverrides,
   DiscoverySnapshot,
-  MemoryCommit,
-  MemoryItem,
-  MemoryNamespace,
-  MemoryQueryResult,
   RunEvent,
   RunSummary,
   SessionContext,
   Task,
-  PromptHistoryEntry,
   Skill
 } from "../messaging/protocol";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { PatternIndexItem } from "../patterns/types";
-import PromptPanel from "./PromptPanel";
 import RunPanel from "./RunPanel";
 import InspectorVariables from "./InspectorVariables";
-import MemoryPanel from "./MemoryPanel";
+import TaskPanel, { type TaskPanelOptions } from "./TaskPanel";
 import { getValidationCounts } from "../utils/validation";
 
 type RightPanelProps = {
-  mode: "library" | "inspector" | "prompt" | "run" | "memory";
+  mode: "library" | "inspector" | "task" | "run";
   open: boolean;
   saveSignal: number;
   snapshot?: DiscoverySnapshot;
   selectedNode?: Node;
   selectedScheduleTaskId?: string;
   selectedEdge?: Edge;
-  onModeChange: (mode: "library" | "inspector" | "prompt" | "run" | "memory") => void;
+  onModeChange: (mode: "library" | "inspector" | "task" | "run") => void;
   onOpenFile: (path: string) => void;
   onRevealPath: (path: string) => void;
   onCreateSkill: (name: string, description: string) => void;
@@ -41,30 +35,17 @@ type RightPanelProps = {
   onSaveSkillFrontmatter: (
     skillId: string,
     name: string,
-    description: string,
-    extraFrontmatter: Record<string, unknown>
-  ) => void;
-  promptBackends: CliBackend[];
-  promptHistory: PromptHistoryEntry[];
-  generationProgress?: {
-    stage: "building_prompt" | "calling_cli" | "parsing_output" | "done" | "error";
-    message: string;
-    progress?: number;
-  };
-  onRefreshPromptTools: () => Promise<void>;
-  onGenerateAgentStructure: (payload: {
-    prompt: string;
-    backendId: CliBackend["id"];
-    includeExistingAgents: boolean;
-    includeExistingSkills: boolean;
-    includeExistingMcpServers: boolean;
-  }) => Promise<void>;
-  onDeletePromptHistory: (historyId: string) => Promise<void>;
-  onReapplyPromptHistory: (historyId: string) => Promise<void>;
+      description: string,
+      extraFrontmatter: Record<string, unknown>
+    ) => void;
   interactionPatterns: PatternIndexItem[];
   onInsertPattern: (patternId: string) => Promise<void>;
   onUpdateInteractionEdge: (edgeId: string, update: { label?: string; data?: Record<string, unknown> }) => void;
   activeFlowName: string;
+  tasks: Task[];
+  onRunTask: (prompt: string, options: TaskPanelOptions) => Promise<void>;
+  onCancelTask: (taskId: string) => void;
+  onViewTaskDetail: (taskId: string) => void;
   runBackends: CliBackend[];
   backendOverrides: CliBackendOverrides;
   defaultBackendId: CliBackend["id"];
@@ -103,14 +84,6 @@ type RightPanelProps = {
     outputPreview?: string;
   }>;
   onOpenRunLog: (runId: string, flowName: string) => void;
-  memoryItems: MemoryItem[];
-  memoryCommits: MemoryCommit[];
-  memoryQueryResult?: MemoryQueryResult;
-  onRefreshMemory: () => Promise<void>;
-  onSearchMemory: (query: string, namespaces?: MemoryNamespace[]) => Promise<void>;
-  onAddMemoryItem: (item: Omit<MemoryItem, "id" | "createdAt" | "updatedAt">) => Promise<void>;
-  onSupersedeMemory: (oldItemId: string, newContent: string, reason: string) => Promise<void>;
-  onCheckoutMemory: (commitId: string) => Promise<void>;
 };
 
 export default function RightPanel(props: RightPanelProps) {
@@ -127,6 +100,13 @@ export default function RightPanel(props: RightPanelProps) {
       return;
     }
     setInspectorTab("overview");
+  }, [props.mode]);
+
+  useEffect(() => {
+    window.requestAnimationFrame(() => {
+      const panel = document.querySelector<HTMLElement>(".right-panel .panel-content");
+      panel?.scrollTo({ top: 0, left: 0 });
+    });
   }, [props.mode]);
 
   const skills = props.snapshot?.skills ?? [];
@@ -224,12 +204,12 @@ export default function RightPanel(props: RightPanelProps) {
         </button>
         <button
           role="tab"
-          aria-selected={props.mode === "prompt"}
-          aria-controls="right-panel-prompt"
-          className={props.mode === "prompt" ? "active" : ""}
-          onClick={() => props.onModeChange("prompt")}
+          aria-selected={props.mode === "task"}
+          aria-controls="right-panel-task"
+          className={props.mode === "task" ? "active" : ""}
+          onClick={() => props.onModeChange("task")}
         >
-          AI Prompt
+          Task
         </button>
         <button
           role="tab"
@@ -239,15 +219,6 @@ export default function RightPanel(props: RightPanelProps) {
           onClick={() => props.onModeChange("run")}
         >
           Run
-        </button>
-        <button
-          role="tab"
-          aria-selected={props.mode === "memory"}
-          aria-controls="right-panel-memory"
-          className={props.mode === "memory" ? "active" : ""}
-          onClick={() => props.onModeChange("memory")}
-        >
-          Memory
         </button>
       </div>
 
@@ -571,15 +542,15 @@ export default function RightPanel(props: RightPanelProps) {
         </div>
       )}
 
-      {props.mode === "prompt" && (
-        <PromptPanel
-          backends={props.promptBackends}
-          history={props.promptHistory}
-          progress={props.generationProgress}
-          onRefresh={props.onRefreshPromptTools}
-          onGenerate={props.onGenerateAgentStructure}
-          onDeleteHistory={props.onDeletePromptHistory}
-          onReapplyHistory={props.onReapplyPromptHistory}
+      {props.mode === "task" && (
+        <TaskPanel
+          agents={props.snapshot?.agents ?? []}
+          tasks={props.tasks}
+          runHistory={props.runHistory}
+          activeRunId={props.activeRunId}
+          onRunTask={props.onRunTask}
+          onCancelTask={props.onCancelTask}
+          onViewTaskDetail={props.onViewTaskDetail}
         />
       )}
 
@@ -607,19 +578,6 @@ export default function RightPanel(props: RightPanelProps) {
           onSetDefaultBackend={props.onSetDefaultBackend}
           onTestBackend={props.onTestBackend}
           onOpenRunLog={props.onOpenRunLog}
-        />
-      )}
-
-      {props.mode === "memory" && (
-        <MemoryPanel
-          items={props.memoryItems}
-          commits={props.memoryCommits}
-          queryResult={props.memoryQueryResult}
-          onRefresh={props.onRefreshMemory}
-          onSearch={props.onSearchMemory}
-          onAdd={props.onAddMemoryItem}
-          onSupersede={props.onSupersedeMemory}
-          onCheckout={props.onCheckoutMemory}
         />
       )}
     </aside>
