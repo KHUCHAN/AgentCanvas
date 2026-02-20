@@ -218,6 +218,42 @@ export interface CliBackendOverride {
 }
 
 export type CliBackendOverrides = Partial<Record<Exclude<CliBackendId, "auto">, CliBackendOverride>>;
+export type NonAutoBackendId = Exclude<CliBackendId, "auto">;
+export type CanonicalBackendId = "claude" | "codex" | "gemini" | "aider" | "custom";
+
+export interface BackendCapabilityProfile {
+  backendId: CanonicalBackendId;
+  displayName: string;
+  strengths: {
+    coding: number;
+    review: number;
+    testing: number;
+    research: number;
+    writing: number;
+    planning: number;
+    multimodal: number;
+    toolUse: number;
+    longContext: number;
+    costEfficiency: number;
+  };
+  limitations: string[];
+  models: Array<{
+    id: string;
+    tier: "fast" | "standard" | "advanced";
+    contextWindow: number;
+    costPer1MInput: number;
+    costPer1MOutput: number;
+  }>;
+  features: {
+    stdinPrompt: boolean;
+    streaming: boolean;
+    mcpSupport: boolean;
+    imageInput: boolean;
+    webSearch: boolean;
+    codeExecution: boolean;
+    sessionResume: boolean;
+  };
+}
 
 export interface GeneratedAgent {
   name: string;
@@ -229,6 +265,9 @@ export interface GeneratedAgent {
   delegatesTo: string[];
   assignedSkillIds: string[];
   assignedMcpServerIds: string[];
+  assignedBackend: CanonicalBackendId;
+  assignedModel?: string;
+  backendAssignReason?: string;
   color?: string;
   avatar?: string;
 }
@@ -245,12 +284,96 @@ export interface SuggestedMcpServer {
   forAgent: string;
 }
 
+export type WorkCategory =
+  | "new_feature"
+  | "bug_fix"
+  | "refactor"
+  | "code_review"
+  | "testing"
+  | "documentation"
+  | "research"
+  | "devops"
+  | "design"
+  | "data_pipeline"
+  | "full_stack"
+  | "mixed";
+
+export interface WorkIntentAnalysis {
+  primaryCategory: WorkCategory;
+  secondaryCategories: WorkCategory[];
+  categoryWeights: Partial<Record<WorkCategory, number>>;
+  suggestedRoles: Array<{
+    role: AgentRole;
+    count: number;
+    reason: string;
+    preferredBackend: CanonicalBackendId;
+    backendReason: string;
+  }>;
+  estimatedComplexity: "light" | "medium" | "heavy";
+  estimatedDuration: "minutes" | "hours" | "days";
+}
+
+export interface BackendBudget {
+  dailyMaxCost?: number;
+  weeklyMaxCost?: number;
+  monthlyMaxCost?: number;
+  dailyMaxCalls?: number;
+  weeklyMaxCalls?: number;
+  monthlyMaxCalls?: number;
+}
+
+export interface BackendUsagePeriod {
+  callCount: number;
+  totalTokens: number;
+  estimatedCost: number;
+  avgLatencyMs: number;
+  successRate: number;
+}
+
+export interface BackendUsageRecord {
+  backendId: CanonicalBackendId;
+  date: string;
+  callCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  estimatedCost: number;
+  avgLatencyMs: number;
+  errorCount: number;
+  successRate: number;
+  calls: Array<{
+    timestamp: string;
+    flowName?: string;
+    agentId?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    latencyMs: number;
+    model?: string;
+    success: boolean;
+    cost: number;
+  }>;
+}
+
+export interface BackendUsageSummary {
+  backendId: CanonicalBackendId;
+  today: BackendUsagePeriod;
+  thisWeek: BackendUsagePeriod;
+  thisMonth: BackendUsagePeriod;
+  budget?: BackendBudget;
+  availabilityScore: number;
+}
+
 export interface GeneratedAgentStructure {
   teamName: string;
   teamDescription: string;
   agents: GeneratedAgent[];
   suggestedNewSkills: SuggestedSkill[];
   suggestedNewMcpServers: SuggestedMcpServer[];
+  workIntent: WorkIntentAnalysis;
+  backendUsageAtBuild: BackendUsageSummary[];
 }
 
 export interface PromptHistoryEntry {
@@ -260,6 +383,92 @@ export interface PromptHistoryEntry {
   createdAt: string;
   applied: boolean;
   result: GeneratedAgentStructure;
+}
+
+export type ChatMode = "planning" | "direct" | "review";
+export type ChatMessageRole = "user" | "orchestrator" | "system";
+
+export interface WorkPlanItem {
+  index: number;
+  title: string;
+  description?: string;
+  assignedAgentId: string;
+  assignedAgentName: string;
+  assignedBackend: NonAutoBackendId;
+  assignedModel?: string;
+  priority: "high" | "medium" | "low";
+  deps: number[];
+  taskId?: string;
+}
+
+export interface WorkPlan {
+  id: string;
+  status: "draft" | "confirmed" | "executing" | "completed" | "canceled";
+  items: WorkPlanItem[];
+  estimatedDuration?: string;
+  estimatedCost?: number;
+}
+
+export interface WorkPlanModification {
+  index: number;
+  title?: string;
+  description?: string;
+  priority?: WorkPlanItem["priority"];
+  assignedAgentId?: string;
+  assignedBackend?: NonAutoBackendId;
+  deps?: number[];
+}
+
+export interface TaskStatusUpdate {
+  taskId: string;
+  title: string;
+  status: Task["status"];
+  progress: number;
+  agentName: string;
+  backendId: string;
+  message?: string;
+}
+
+export interface TaskCompleteSummary {
+  taskId: string;
+  title: string;
+  durationMs: number;
+  changedFiles: string[];
+  diffSummary?: string;
+  cost?: number;
+}
+
+export interface FileDiffEntry {
+  path: string;
+  additions: number;
+  deletions: number;
+  preview?: string;
+}
+
+export type ChatMessageContent =
+  | { kind: "text"; text: string }
+  | { kind: "work_plan"; plan: WorkPlan }
+  | { kind: "task_status"; taskId: string; status: TaskStatusUpdate }
+  | { kind: "task_complete"; taskId: string; summary: TaskCompleteSummary }
+  | { kind: "run_event"; event: RunEvent }
+  | { kind: "node_context"; nodeId: string; nodeType: string; data: Record<string, unknown> }
+  | { kind: "error"; message: string; recoverable: boolean }
+  | { kind: "cost_alert"; backendId: string; usage: BackendUsageSummary }
+  | { kind: "file_diff"; files: FileDiffEntry[] }
+  | { kind: "approval_request"; requestId: string; description: string; options: string[] };
+
+export interface ChatMessage {
+  id: string;
+  role: ChatMessageRole;
+  content: ChatMessageContent[];
+  timestamp: number;
+  metadata?: {
+    runId?: string;
+    taskIds?: string[];
+    backendId?: string;
+    model?: string;
+    tokens?: { input: number; output: number };
+  };
 }
 
 export interface SkillPackPreviewItem {

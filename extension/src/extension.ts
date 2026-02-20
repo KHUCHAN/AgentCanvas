@@ -24,8 +24,15 @@ import {
 } from "./services/agentProfileService";
 import { detectAllCliBackends, pickPromptBackend, testBackend } from "./services/cliDetector";
 import { executeCliPrompt } from "./services/cliExecutor";
+import { assignBackends } from "./services/backendAssigner";
+import {
+  BACKEND_PROFILES,
+  listAvailableCanonicalBackends,
+  normalizeBackendId
+} from "./services/backendProfiles";
 import { buildAnnounce } from "./services/announceService";
 import { appendCollabEvent, generateCollabReport, readCollabEvents } from "./services/collaborationLogger";
+import { BackendUsageTracker } from "./services/backendUsageTracker";
 import { reviewProposal } from "./services/reviewGate";
 import { runDiscovery } from "./services/discovery";
 import {
@@ -72,8 +79,16 @@ import {
 } from "./services/memoryStore";
 import { queryMemory } from "./services/memoryQuery";
 import { updateSkillFrontmatter } from "./services/skillEditor";
+import { analyzeWorkIntent, defaultWorkIntentAnalysis } from "./services/workIntentAnalyzer";
+import {
+  ChatOrchestrator,
+  createChatMessage,
+  isCancelCommand,
+  isConfirmCommand
+} from "./services/chatOrchestrator";
 import { buildSessionId, splitSessionFlow, withSessionFlow } from "./services/sessionService";
 import { getSandboxPaths, prepareSandbox, type PrepareSandboxResult } from "./services/sandboxService";
+import { WorkPlanService } from "./services/workPlanService";
 import { exportSkillPack, importSkillPack, previewSkillPack } from "./services/zipPack";
 import { ScheduleService } from "./schedule/scheduleService";
 import type {
@@ -83,12 +98,17 @@ import type {
 import { hasRequestId } from "./messages/protocol";
 import type {
   AgentProfile,
+  BackendBudget,
+  BackendUsageSummary,
+  ChatMessage,
+  CanonicalBackendId,
   CliBackend,
   CliBackendId,
   CliBackendOverrides,
   DiscoverySnapshot,
   GeneratedAgentStructure,
   InteractionEdgeData,
+  WorkPlan,
   Task,
   TaskEvent,
   StudioEdge,
@@ -141,6 +161,11 @@ class AgentCanvasPanel {
     )
   });
   private readonly tokenTracker = new TokenTracker();
+  private readonly usageTrackerByWorkspace = new Map<string, BackendUsageTracker>();
+  private readonly chatOrchestrator = new ChatOrchestrator();
+  private readonly workPlanService = new WorkPlanService();
+  private readonly chatHistoryByWorkspace = new Map<string, ChatMessage[]>();
+  private readonly pendingPlanByWorkspace = new Map<string, WorkPlan>();
   private snapshot: DiscoverySnapshot | undefined;
   private notes: StickyNote[] = [];
   private notesLoaded = false;
@@ -262,6 +287,11 @@ class AgentCanvasPanel {
     switch (message.type) {
       case "READY": {
         await this.refreshState(true);
+        await this.publishBackendUsageUpdate().catch(() => undefined);
+        this.postMessage({
+          type: "CHAT_HISTORY",
+          payload: { messages: this.getChatHistory() }
+        });
         return { ok: true };
       }
       case "REFRESH": {
@@ -484,6 +514,7 @@ class AgentCanvasPanel {
           type: "CLI_BACKENDS",
           payload: { backends }
         });
+        await this.publishBackendUsageUpdate(backends);
         return { backends };
       }
       case "TEST_BACKEND": {
@@ -499,12 +530,25 @@ class AgentCanvasPanel {
         try {
           const snapshot = await this.ensureSnapshot();
           const backends = await this.detectCliBackends();
-          const backend = pickPromptBackend(backends, message.payload.backendId);
+          const usageTracker = this.getBackendUsageTracker();
+          const availableCanonical = listAvailableCanonicalBackends(backends);
+          const usageSummaries = await usageTracker.getAllSummaries(availableCanonical);
+          const useSmartAssignment = message.payload.useSmartAssignment !== false;
+          const preferredBackends = (message.payload.preferredBackends ?? []).filter((backendId) =>
+            availableCanonical.includes(backendId)
+          );
+          const backend = pickPromptBackend(backends, message.payload.backendId ?? "auto", usageSummaries);
           const cacheConfig = await loadConfig(this.getWorkspaceRoot());
           const modelId = resolveModel({
             agent: undefined,
             taskType: "generation",
             config: cacheConfig
+          });
+          const workIntent = analyzeWorkIntent({
+            prompt: message.payload.prompt,
+            existingAgents: snapshot.agents,
+            availableBackends: backends,
+            usageSummaries
           });
 
           this.postGenerationProgress("building_prompt", `Building prompt for ${backend.displayName}`, 15);
@@ -512,7 +556,11 @@ class AgentCanvasPanel {
             userPrompt: message.payload.prompt,
             existingAgents: message.payload.includeExistingAgents ? snapshot.agents : [],
             existingSkills: message.payload.includeExistingSkills ? snapshot.skills : [],
-            existingMcpServers: message.payload.includeExistingMcpServers ? snapshot.mcpServers : []
+            existingMcpServers: message.payload.includeExistingMcpServers ? snapshot.mcpServers : [],
+            useSmartAssignment,
+            preferredBackends,
+            budgetConstraint: message.payload.budgetConstraint,
+            backendUsage: usageSummaries
           });
 
           this.postGenerationProgress("calling_cli", `Calling ${backend.displayName}`, 45);
@@ -528,7 +576,33 @@ class AgentCanvasPanel {
           }
 
           this.postGenerationProgress("parsing_output", "Parsing generated structure", 75);
-          const structure = parseAgentStructure(result.output);
+          const parsed = parseAgentStructure(result.output);
+          const generationBackend = normalizeBackendId(backend.id) ?? "claude";
+          await usageTracker.recordCall({
+            backendId: generationBackend,
+            usage: result.usage,
+            latencyMs: result.durationMs,
+            success: result.success,
+            modelHint: modelId,
+            flowName: "team-build",
+            agentId: "team-designer"
+          });
+          const agents = assignBackends({
+            agents: parsed.agents,
+            workIntent,
+            usageSummaries,
+            profiles: BACKEND_PROFILES,
+            availableBackends: availableCanonical,
+            preferredBackends,
+            budgetConstraint: message.payload.budgetConstraint,
+            manualBackend: useSmartAssignment ? undefined : generationBackend
+          });
+          const structure: GeneratedAgentStructure = {
+            ...parsed,
+            agents,
+            workIntent,
+            backendUsageAtBuild: usageSummaries
+          };
           const historyEntry = await appendPromptHistory({
             workspaceRoot: this.getWorkspaceRoot(),
             prompt: message.payload.prompt,
@@ -542,6 +616,7 @@ class AgentCanvasPanel {
             type: "PROMPT_HISTORY",
             payload: { items: await readPromptHistory(this.getWorkspaceRoot()) }
           });
+          await this.publishBackendUsageUpdate(backends);
 
           return {
             structure,
@@ -595,6 +670,160 @@ class AgentCanvasPanel {
           payload: { items: await readPromptHistory(this.getWorkspaceRoot()) }
         });
         return { ok: true, historyId: item.id };
+      }
+      case "CHAT_GET_HISTORY": {
+        const payload = "payload" in message ? message.payload : undefined;
+        const history = this.getChatHistory();
+        const limited = payload?.limit && payload.limit > 0
+          ? history.slice(-payload.limit)
+          : history;
+        this.postMessage({
+          type: "CHAT_HISTORY",
+          payload: { messages: limited }
+        });
+        return { messages: limited };
+      }
+      case "CHAT_SEND": {
+        const content = message.payload.content.trim();
+        const workspaceRoot = this.getWorkspaceRoot();
+        if (!content) {
+          throw new Error("Chat content is empty");
+        }
+        const userMessage = createChatMessage(
+          "user",
+          [{ kind: "text", text: content }],
+          {
+            backendId: message.payload.backendId,
+            model: message.payload.modelId
+          }
+        );
+        this.appendChatMessage(userMessage, true);
+
+        const pendingPlan = this.pendingPlanByWorkspace.get(workspaceRoot);
+        if (pendingPlan && isConfirmCommand(content)) {
+          const result = await this.confirmWorkPlanAndStart(pendingPlan.id);
+          return { ok: true, action: "confirmed", ...result };
+        }
+        if (pendingPlan && isCancelCommand(content)) {
+          const canceled = this.workPlanService.setStatus(workspaceRoot, pendingPlan.id, "canceled");
+          this.pendingPlanByWorkspace.delete(workspaceRoot);
+          this.postMessage({
+            type: "WORK_PLAN_UPDATED",
+            payload: { plan: canceled }
+          });
+          const canceledMessage = createChatMessage("orchestrator", [
+            { kind: "text", text: "Understood. I canceled the current plan." }
+          ]);
+          this.appendChatMessage(canceledMessage, true);
+          return { ok: true, action: "canceled", plan: canceled };
+        }
+
+        const snapshot = await this.ensureSnapshot();
+        const runId = this.resolveMostRecentRunId();
+        const activeTasks = runId ? this.scheduleService.getTasks(runId).filter((task) => task.status !== "done") : [];
+        const completedTasks = runId ? this.scheduleService.getTasks(runId).filter((task) => task.status === "done") : [];
+        const usageSummaries = await this.getBackendUsageTracker().getAllSummaries();
+        const orchestratorResult = await this.chatOrchestrator.handleUserMessage({
+          content,
+          mode: message.payload.mode,
+          backendId: message.payload.backendId,
+          context: {
+            agents: snapshot.agents,
+            activeRunId: runId,
+            activeTasks,
+            completedTasks,
+            chatHistory: this.getChatHistory(),
+            usageSummaries
+          }
+        });
+        for (const chatMessage of orchestratorResult.messages) {
+          this.appendChatMessage(chatMessage, true);
+        }
+        if (orchestratorResult.draftPlan) {
+          const created = this.workPlanService.create(workspaceRoot, orchestratorResult.draftPlan);
+          this.pendingPlanByWorkspace.set(workspaceRoot, created);
+          this.postMessage({
+            type: "WORK_PLAN_UPDATED",
+            payload: { plan: created }
+          });
+          if (message.payload.mode === "direct") {
+            const result = await this.confirmWorkPlanAndStart(created.id);
+            return { ok: true, action: "direct_confirmed", ...result };
+          }
+        }
+        return {
+          ok: true,
+          messages: orchestratorResult.messages
+        };
+      }
+      case "WORK_PLAN_MODIFY": {
+        const updated = this.workPlanService.applyModifications(
+          this.getWorkspaceRoot(),
+          message.payload.planId,
+          message.payload.modifications
+        );
+        if (updated.status === "draft") {
+          this.pendingPlanByWorkspace.set(this.getWorkspaceRoot(), updated);
+        }
+        this.postMessage({
+          type: "WORK_PLAN_UPDATED",
+          payload: { plan: updated }
+        });
+        const note = createChatMessage("orchestrator", [
+          { kind: "text", text: "Updated the plan changes you requested." },
+          { kind: "work_plan", plan: updated }
+        ]);
+        this.appendChatMessage(note, true);
+        return { ok: true, plan: updated };
+      }
+      case "WORK_PLAN_CONFIRM": {
+        const result = await this.confirmWorkPlanAndStart(message.payload.planId);
+        return { ok: true, ...result };
+      }
+      case "WORK_PLAN_CANCEL": {
+        const canceled = this.workPlanService.setStatus(
+          this.getWorkspaceRoot(),
+          message.payload.planId,
+          "canceled"
+        );
+        this.pendingPlanByWorkspace.delete(this.getWorkspaceRoot());
+        this.postMessage({
+          type: "WORK_PLAN_UPDATED",
+          payload: { plan: canceled }
+        });
+        const canceledMessage = createChatMessage("orchestrator", [
+          { kind: "text", text: "The work plan was canceled." }
+        ]);
+        this.appendChatMessage(canceledMessage, true);
+        return { ok: true, plan: canceled };
+      }
+      case "TASK_STOP_FROM_CHAT": {
+        const stopped = this.stopTaskFromChat(message.payload.taskId);
+        if (!stopped) {
+          return { ok: false, message: "Task not found in active runs." };
+        }
+        const stopMessage = createChatMessage("orchestrator", [
+          {
+            kind: "text",
+            text: `Stopped task "${stopped.task.title}" (${stopped.task.id}).`
+          }
+        ], { runId: stopped.runId, taskIds: [stopped.task.id] });
+        this.appendChatMessage(stopMessage, true);
+        this.postMessage({
+          type: "TASK_STATUS_UPDATE",
+          payload: {
+            update: {
+              taskId: stopped.task.id,
+              title: stopped.task.title,
+              status: "blocked",
+              progress: stopped.task.progress ?? 0,
+              agentName: stopped.task.agentId,
+              backendId: String((stopped.task.meta as Record<string, unknown> | undefined)?.backendId ?? "auto"),
+              message: "Stopped from chat"
+            }
+          }
+        });
+        return { ok: true, taskId: stopped.task.id, runId: stopped.runId };
       }
       case "LIST_FLOWS": {
         return { flows: await this.listFlows() };
@@ -967,7 +1196,29 @@ class AgentCanvasPanel {
           type: "CLI_BACKENDS",
           payload: { backends }
         });
+        await this.publishBackendUsageUpdate(backends);
         return { backends };
+      }
+      case "GET_BACKEND_USAGE": {
+        const backends = await this.detectCliBackends();
+        const summaries = await this.publishBackendUsageUpdate(backends);
+        const payload = "payload" in message ? message.payload : undefined;
+        if (payload?.backendId) {
+          const summary = summaries.find((item) => item.backendId === payload.backendId);
+          return { summaries: summary ? [summary] : [] };
+        }
+        return { summaries };
+      }
+      case "SET_BACKEND_BUDGET": {
+        const tracker = this.getBackendUsageTracker();
+        await tracker.setBudget(message.payload.backendId, message.payload.budget);
+        const backends = await this.detectCliBackends();
+        const summaries = await this.publishBackendUsageUpdate(backends);
+        return { ok: true, summaries };
+      }
+      case "GET_BACKEND_BUDGETS": {
+        const tracker = this.getBackendUsageTracker();
+        return { budgets: await tracker.getBudgets() };
       }
       case "LOG_INTERACTION_EVENT": {
         await this.logInteractionEvent({
@@ -2512,6 +2763,20 @@ class AgentCanvasPanel {
           actualStartMs: Date.now(),
           progress: 0
         });
+        this.postMessage({
+          type: "TASK_STATUS_UPDATE",
+          payload: {
+            update: {
+              taskId: nextTask.id,
+              title: nextTask.title,
+              status: "running",
+              progress: 0,
+              agentName: nextTask.agentId,
+              backendId: String(input.requestedBackendId ?? "auto"),
+              message: "Task started"
+            }
+          }
+        });
         const dispatchedAt = Date.now();
         const taskDispatchPayload = {
           taskId: nextTask.id,
@@ -2739,6 +3004,21 @@ class AgentCanvasPanel {
           }
           : undefined;
 
+        const usageBackendId = normalizeBackendId(backend.id);
+        if (usageBackendId) {
+          const usageTracker = this.getBackendUsageTracker();
+          await usageTracker.recordCall({
+            backendId: usageBackendId,
+            usage,
+            latencyMs: result.durationMs,
+            success: result.success,
+            modelHint: modelId,
+            flowName: input.flowName,
+            agentId: taskAgent?.id
+          });
+          await this.publishBackendUsageUpdate().catch(() => undefined);
+        }
+
         const metrics = this.tokenTracker.recordUsage({
           flowName: input.flowName,
           usage,
@@ -2780,6 +3060,35 @@ class AgentCanvasPanel {
               backendId: backend.id
             }
           });
+          this.postMessage({
+            type: "TASK_STATUS_UPDATE",
+            payload: {
+              update: {
+                taskId: nextTask.id,
+                title: nextTask.title,
+                status: "done",
+                progress: 1,
+                agentName: taskAgent?.name ?? nextTask.agentId,
+                backendId: String(backend.id),
+                message: "Task completed"
+              }
+            }
+          });
+          const completeMessage = createChatMessage("orchestrator", [
+            {
+              kind: "task_complete",
+              taskId: nextTask.id,
+              summary: {
+                taskId: nextTask.id,
+                title: nextTask.title,
+                durationMs: result.durationMs,
+                changedFiles: [],
+                diffSummary: result.output.slice(0, 120),
+                cost: usage?.cost
+              }
+            }
+          ], { runId: input.runId, taskIds: [nextTask.id], backendId: String(backend.id) });
+          this.appendChatMessage(completeMessage, true);
           await appendRunEvent({
             workspaceRoot,
             flowName: input.flowName,
@@ -2869,6 +3178,24 @@ class AgentCanvasPanel {
               backendId: backend.id
             }
           });
+          this.postMessage({
+            type: "TASK_STATUS_UPDATE",
+            payload: {
+              update: {
+                taskId: nextTask.id,
+                title: nextTask.title,
+                status: "failed",
+                progress: nextTask.progress ?? 0,
+                agentName: taskAgent?.name ?? nextTask.agentId,
+                backendId: String(backend.id),
+                message: failedMessage
+              }
+            }
+          });
+          const failedChat = createChatMessage("orchestrator", [
+            { kind: "error", message: failedMessage, recoverable: true }
+          ], { runId: input.runId, taskIds: [nextTask.id], backendId: String(backend.id) });
+          this.appendChatMessage(failedChat, true);
           await appendRunEvent({
             workspaceRoot,
             flowName: input.flowName,
@@ -3575,7 +3902,10 @@ class AgentCanvasPanel {
       }
     }
 
-    return pickPromptBackend(backends, backendId ?? "auto");
+    const usageSummaries = await this.getBackendUsageTracker().getAllSummaries(
+      listAvailableCanonicalBackends(backends)
+    );
+    return pickPromptBackend(backends, backendId ?? "auto", usageSummaries);
   }
 
   private async setAgentRuntime(agentId: string, runtime: AgentProfile["runtime"] | null): Promise<void> {
@@ -3592,6 +3922,101 @@ class AgentCanvasPanel {
   private async setBackendOverrides(overrides: CliBackendOverrides): Promise<void> {
     const config = vscode.workspace.getConfiguration("agentCanvas");
     await config.update("cliBackendOverrides", overrides, vscode.ConfigurationTarget.Workspace);
+  }
+
+  private getChatHistory(): ChatMessage[] {
+    const workspaceRoot = this.getWorkspaceRoot();
+    return this.chatHistoryByWorkspace.get(workspaceRoot) ?? [];
+  }
+
+  private appendChatMessage(message: ChatMessage, emit = true): void {
+    const next = [...this.getChatHistory(), message].slice(-400);
+    this.chatHistoryByWorkspace.set(this.getWorkspaceRoot(), next);
+    if (emit) {
+      this.postMessage({
+        type: "CHAT_MESSAGE",
+        payload: { message }
+      });
+    }
+  }
+
+  private resolveMostRecentRunId(): string | undefined {
+    const runIds = this.scheduleService.listRunIds();
+    if (runIds.length === 0) {
+      return undefined;
+    }
+    return runIds[runIds.length - 1];
+  }
+
+  private stopTaskFromChat(taskId: string): { runId: string; task: Task } | undefined {
+    for (const runId of this.scheduleService.listRunIds()) {
+      const tasks = this.scheduleService.getTasks(runId);
+      const target = tasks.find((task) => task.id === taskId);
+      if (!target) {
+        continue;
+      }
+      const patched = this.scheduleService.patchTask(runId, taskId, {
+        status: "blocked",
+        actualEndMs: Date.now(),
+        blocker: {
+          kind: "external",
+          message: "Stopped from chat"
+        }
+      });
+      this.scheduleService.recompute(runId);
+      return { runId, task: patched };
+    }
+    return undefined;
+  }
+
+  private async confirmWorkPlanAndStart(planId: string): Promise<{
+    plan: WorkPlan;
+    runId: string;
+    flowName: string;
+    taskIds: string[];
+  }> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const confirmed = this.workPlanService.setStatus(workspaceRoot, planId, "confirmed");
+    this.pendingPlanByWorkspace.delete(workspaceRoot);
+    this.postMessage({
+      type: "WORK_PLAN_UPDATED",
+      payload: { plan: confirmed }
+    });
+
+    const instructionLines = confirmed.items.map((item) =>
+      `${item.index}. ${item.title} [${item.priority}] -> ${item.assignedAgentName} (${item.assignedBackend})`
+    );
+    const backendId = confirmed.items[0]?.assignedBackend ?? "auto";
+    const run = await this.runFlow({
+      flowName: "default",
+      backendId,
+      instruction: `Execute this work plan:\n${instructionLines.join("\n")}`,
+      runName: confirmed.id,
+      tags: ["chat", "work-plan"],
+      usePinnedOutputs: false
+    });
+
+    const executing = this.workPlanService.setStatus(workspaceRoot, planId, "executing");
+    this.postMessage({
+      type: "WORK_PLAN_UPDATED",
+      payload: { plan: executing }
+    });
+
+    const startMessage = createChatMessage("orchestrator", [
+      {
+        kind: "text",
+        text: `Started execution for plan "${planId}" (${confirmed.items.length} item(s)).`
+      }
+    ], { runId: run.runId });
+    this.appendChatMessage(startMessage, true);
+
+    const taskIds = this.scheduleService.getTasks(run.runId).map((task) => task.id);
+    return {
+      plan: executing,
+      runId: run.runId,
+      flowName: run.flowName,
+      taskIds
+    };
   }
 
   private async resolveFlowNameForRun(runId: string): Promise<string> {
@@ -3625,6 +4050,54 @@ class AgentCanvasPanel {
       customCliArgs: config.get<string[]>("customCliArgs", []),
       backendOverrides: config.get<CliBackendOverrides>("cliBackendOverrides", {})
     });
+  }
+
+  private getBackendUsageTracker(): BackendUsageTracker {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const cached = this.usageTrackerByWorkspace.get(workspaceRoot);
+    if (cached) {
+      return cached;
+    }
+    const created = new BackendUsageTracker(workspaceRoot);
+    this.usageTrackerByWorkspace.set(workspaceRoot, created);
+    return created;
+  }
+
+  private async publishBackendUsageUpdate(backends?: CliBackend[]): Promise<BackendUsageSummary[]> {
+    const tracker = this.getBackendUsageTracker();
+    const resolvedBackends = backends ?? (await this.detectCliBackends());
+    const availableCanonical = listAvailableCanonicalBackends(resolvedBackends);
+    const summaries = await tracker.getAllSummaries(availableCanonical);
+    this.postMessage({
+      type: "BACKEND_USAGE_UPDATE",
+      payload: { summaries }
+    });
+
+    for (const summary of summaries) {
+      if (!summary.budget) {
+        continue;
+      }
+      if (summary.availabilityScore <= 0) {
+        this.postMessage({
+          type: "BUDGET_WARNING",
+          payload: {
+            backendId: summary.backendId,
+            type: "exceeded",
+            detail: `${summary.backendId} budget exceeded (${summary.today.estimatedCost.toFixed(2)} USD today)`
+          }
+        });
+      } else if (summary.availabilityScore <= 0.15) {
+        this.postMessage({
+          type: "BUDGET_WARNING",
+          payload: {
+            backendId: summary.backendId,
+            type: "approaching",
+            detail: `${summary.backendId} budget is near limit (${summary.today.estimatedCost.toFixed(2)} USD today)`
+          }
+        });
+      }
+    }
+    return summaries;
   }
 
   private postGenerationProgress(
@@ -3663,6 +4136,8 @@ class AgentCanvasPanel {
       const sourceNameKey = normalizeLabel(generated.name);
       const existing = normalizedNameToAgent.get(sourceNameKey);
       let targetAgent: AgentProfile;
+      const assignedBackend = generated.assignedBackend ?? (generated.role === "researcher" ? "gemini" : "claude");
+      const assignedModel = generated.assignedModel;
 
       try {
         if (existing && (overwriteExisting || existing.id.startsWith("custom:"))) {
@@ -3675,6 +4150,13 @@ class AgentCanvasPanel {
               description: generated.description,
               systemPrompt: generated.systemPrompt,
               isOrchestrator: generated.isOrchestrator,
+              preferredModel: assignedModel,
+              runtime: {
+                kind: "cli",
+                backendId: assignedBackend,
+                cwdMode: generated.isOrchestrator ? "workspace" : "agentHome",
+                modelId: assignedModel
+              },
               color: generated.color,
               avatar: generated.avatar
             }
@@ -3694,16 +4176,21 @@ class AgentCanvasPanel {
             isOrchestrator: generated.isOrchestrator
           });
 
-          if (generated.color || generated.avatar) {
-            targetAgent = await applyAgentProfilePatch({
-              workspaceRoot,
-              baseProfile: targetAgent,
-              patch: {
-                color: generated.color,
-                avatar: generated.avatar
+          targetAgent = await applyAgentProfilePatch({
+            workspaceRoot,
+            baseProfile: targetAgent,
+            patch: {
+              color: generated.color,
+              avatar: generated.avatar,
+              preferredModel: assignedModel,
+              runtime: {
+                kind: "cli",
+                backendId: assignedBackend,
+                cwdMode: generated.isOrchestrator ? "workspace" : "agentHome",
+                modelId: assignedModel
               }
-            });
-          }
+            }
+          });
         }
 
         normalizedNameToAgent.set(sourceNameKey, targetAgent);

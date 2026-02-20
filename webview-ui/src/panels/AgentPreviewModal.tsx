@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import type { GeneratedAgentStructure } from "../messaging/protocol";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  CanonicalBackendId,
+  GeneratedAgentStructure
+} from "../messaging/protocol";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type AgentPreviewModalProps = {
@@ -15,6 +18,14 @@ type AgentPreviewModalProps = {
   }) => Promise<void>;
 };
 
+const BACKEND_OPTIONS: CanonicalBackendId[] = [
+  "claude",
+  "codex",
+  "gemini",
+  "aider",
+  "custom"
+];
+
 export default function AgentPreviewModal({
   open,
   structure,
@@ -25,6 +36,7 @@ export default function AgentPreviewModal({
   const [createSuggestedSkills, setCreateSuggestedSkills] = useState(true);
   const [overwriteExisting, setOverwriteExisting] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<GeneratedAgentStructure>();
   const modalRef = useRef<HTMLDivElement>(null);
   useFocusTrap(modalRef, open);
 
@@ -33,8 +45,15 @@ export default function AgentPreviewModal({
       setCreateSuggestedSkills(true);
       setOverwriteExisting(false);
       setBusy(false);
+      setDraft(undefined);
+      return;
     }
-  }, [open]);
+    if (!structure) {
+      setDraft(undefined);
+      return;
+    }
+    setDraft(cloneStructure(structure));
+  }, [open, structure]);
 
   useEffect(() => {
     if (!open) {
@@ -50,7 +69,14 @@ export default function AgentPreviewModal({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [busy, onClose, open]);
 
-  if (!open || !structure) {
+  const backendCoverage = useMemo(() => {
+    if (!draft) {
+      return new Set<CanonicalBackendId>();
+    }
+    return new Set(draft.backendUsageAtBuild.map((summary) => summary.backendId));
+  }, [draft]);
+
+  if (!open || !draft) {
     return null;
   }
 
@@ -58,7 +84,7 @@ export default function AgentPreviewModal({
     setBusy(true);
     try {
       await onApply({
-        structure,
+        structure: draft,
         createSuggestedSkills,
         overwriteExisting,
         historyId
@@ -80,21 +106,114 @@ export default function AgentPreviewModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="agent-detail-header">
-          <div className="import-title">Generated Team: {structure.teamName}</div>
-          <div className="import-subtitle">{structure.teamDescription}</div>
+          <div className="import-title">Generated Team: {draft.teamName}</div>
+          <div className="import-subtitle">{draft.teamDescription}</div>
         </div>
 
         <div className="agent-detail-content">
           <div className="inspector-block">
-            <div className="inspector-title">Agents ({structure.agents.length})</div>
+            <div className="inspector-title">Work intent</div>
+            <div className="node-meta">
+              Primary: {draft.workIntent.primaryCategory} · Complexity: {draft.workIntent.estimatedComplexity} · Duration: {draft.workIntent.estimatedDuration}
+            </div>
+            {draft.workIntent.secondaryCategories.length > 0 && (
+              <div className="node-meta">
+                Secondary: {draft.workIntent.secondaryCategories.join(", ")}
+              </div>
+            )}
+          </div>
+
+          {draft.backendUsageAtBuild.length > 0 && (
+            <div className="inspector-block">
+              <div className="inspector-title">Backend usage snapshot</div>
+              <div className="agent-detail-list">
+                {draft.backendUsageAtBuild.map((summary) => (
+                  <div key={summary.backendId} className="agent-detail-item">
+                    <div className="agent-detail-item-header">
+                      <div className="item-title">{toBackendTitle(summary.backendId)}</div>
+                      <span className="pill">{Math.round((1 - summary.availabilityScore) * 100)}% used</span>
+                    </div>
+                    <div className="node-meta">
+                      Today: ${summary.today.estimatedCost.toFixed(2)} · {summary.today.callCount} calls
+                    </div>
+                    <div className="node-meta">
+                      Week: ${summary.thisWeek.estimatedCost.toFixed(2)} · Month: ${summary.thisMonth.estimatedCost.toFixed(2)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="inspector-block">
+            <div className="inspector-title">Agents ({draft.agents.length})</div>
             <div className="agent-detail-list">
-              {structure.agents.map((agent) => (
-                <div key={`${agent.name}:${agent.role}`} className="agent-detail-item">
+              {draft.agents.map((agent, index) => (
+                <div key={`${agent.name}:${agent.role}:${index}`} className="agent-detail-item">
                   <div className="agent-detail-item-header">
                     <div className="item-title">{agent.avatar ? `${agent.avatar} ` : ""}{agent.name}</div>
                     <span className="pill">{agent.role}</span>
                   </div>
                   <div className="item-subtitle">{agent.description || "No description"}</div>
+
+                  <div className="agent-preview-backend-edit">
+                    <label>
+                      Backend
+                      <select
+                        value={agent.assignedBackend}
+                        onChange={(event) =>
+                          setDraft((previous) => {
+                            if (!previous) {
+                              return previous;
+                            }
+                            const nextAgents = [...previous.agents];
+                            nextAgents[index] = {
+                              ...nextAgents[index],
+                              assignedBackend: event.target.value as CanonicalBackendId
+                            };
+                            return {
+                              ...previous,
+                              agents: nextAgents
+                            };
+                          })
+                        }
+                      >
+                        {BACKEND_OPTIONS.map((backendId) => (
+                          <option key={backendId} value={backendId}>
+                            {toBackendTitle(backendId)}
+                            {backendCoverage.has(backendId) ? "" : " (no usage data)"}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Model
+                      <input
+                        value={agent.assignedModel ?? ""}
+                        onChange={(event) =>
+                          setDraft((previous) => {
+                            if (!previous) {
+                              return previous;
+                            }
+                            const nextAgents = [...previous.agents];
+                            nextAgents[index] = {
+                              ...nextAgents[index],
+                              assignedModel: event.target.value.trim() || undefined
+                            };
+                            return {
+                              ...previous,
+                              agents: nextAgents
+                            };
+                          })
+                        }
+                        placeholder="optional model id"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="node-meta">
+                    {agent.backendAssignReason || "No assignment reason"}
+                  </div>
                   <div className="node-meta">
                     Delegates: {agent.delegatesTo.length || 0} · Skills: {agent.assignedSkillIds.length || 0} · MCP: {agent.assignedMcpServerIds.length || 0}
                   </div>
@@ -103,15 +222,15 @@ export default function AgentPreviewModal({
             </div>
           </div>
 
-          {(structure.suggestedNewSkills.length > 0 || structure.suggestedNewMcpServers.length > 0) && (
+          {(draft.suggestedNewSkills.length > 0 || draft.suggestedNewMcpServers.length > 0) && (
             <div className="inspector-block">
               <div className="inspector-title">Suggested New Resources</div>
-              {structure.suggestedNewSkills.map((item) => (
+              {draft.suggestedNewSkills.map((item) => (
                 <div key={`skill:${item.name}:${item.forAgent}`} className="validation-item warning">
                   Skill: {item.name} · for {item.forAgent || "(unassigned)"}
                 </div>
               ))}
-              {structure.suggestedNewMcpServers.map((item) => (
+              {draft.suggestedNewMcpServers.map((item) => (
                 <div key={`mcp:${item.name}:${item.forAgent}`} className="validation-item warning">
                   MCP: {item.name} ({item.kind}) · for {item.forAgent || "(unassigned)"}
                 </div>
@@ -147,4 +266,42 @@ export default function AgentPreviewModal({
       </div>
     </div>
   );
+}
+
+function cloneStructure(input: GeneratedAgentStructure): GeneratedAgentStructure {
+  return {
+    ...input,
+    agents: input.agents.map((agent) => ({ ...agent })),
+    suggestedNewSkills: input.suggestedNewSkills.map((skill) => ({ ...skill })),
+    suggestedNewMcpServers: input.suggestedNewMcpServers.map((server) => ({ ...server })),
+    workIntent: {
+      ...input.workIntent,
+      secondaryCategories: [...input.workIntent.secondaryCategories],
+      categoryWeights: { ...input.workIntent.categoryWeights },
+      suggestedRoles: input.workIntent.suggestedRoles.map((role) => ({ ...role }))
+    },
+    backendUsageAtBuild: input.backendUsageAtBuild.map((summary) => ({
+      ...summary,
+      today: { ...summary.today },
+      thisWeek: { ...summary.thisWeek },
+      thisMonth: { ...summary.thisMonth },
+      budget: summary.budget ? { ...summary.budget } : undefined
+    }))
+  };
+}
+
+function toBackendTitle(backendId: CanonicalBackendId): string {
+  if (backendId === "claude") {
+    return "Claude";
+  }
+  if (backendId === "codex") {
+    return "Codex";
+  }
+  if (backendId === "gemini") {
+    return "Gemini";
+  }
+  if (backendId === "aider") {
+    return "Aider";
+  }
+  return "Custom";
 }

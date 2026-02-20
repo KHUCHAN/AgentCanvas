@@ -1,4 +1,10 @@
-import type { AgentProfile, McpServer, Skill } from "../types";
+import type {
+  AgentProfile,
+  BackendUsageSummary,
+  CanonicalBackendId,
+  McpServer,
+  Skill
+} from "../types";
 
 type CachedPromptInput = {
   flowName: string;
@@ -117,6 +123,10 @@ export function buildAgentGenerationPrompt(input: {
   existingAgents: AgentProfile[];
   existingSkills: Skill[];
   existingMcpServers: McpServer[];
+  preferredBackends?: CanonicalBackendId[];
+  useSmartAssignment?: boolean;
+  budgetConstraint?: "strict" | "soft";
+  backendUsage?: BackendUsageSummary[];
   maxPromptTokens?: number;
 }): string {
   const agentContext = input.existingAgents.map((agent) => ({
@@ -156,6 +166,18 @@ export function buildAgentGenerationPrompt(input: {
     "### Available MCP servers",
     JSON.stringify(mcpContext, null, 2),
     "",
+    "### Backend strategy",
+    JSON.stringify(
+      {
+        useSmartAssignment: input.useSmartAssignment ?? true,
+        preferredBackends: input.preferredBackends ?? [],
+        budgetConstraint: input.budgetConstraint ?? "soft",
+        backendUsage: input.backendUsage ?? []
+      },
+      null,
+      2
+    ),
+    "",
     "## Instructions",
     "1. Create agents with clear roles based on the user's request.",
     "2. Exactly one agent must be orchestrator (isOrchestrator=true).",
@@ -166,6 +188,7 @@ export function buildAgentGenerationPrompt(input: {
     "7. NEVER put task statements in suggestedNewSkills (bad: \"implement login page\", \"fix API bug\").",
     "8. suggestedNewSkills[].name must be kebab-case folder names (example: \"api-schema-validator\").",
     "9. If something is a task, encode it in agent systemPrompt/delegation, not in suggestedNewSkills.",
+    "10. assignedBackend must be explicit (claude|codex|gemini|aider|custom); never use auto.",
     "",
     "## Output schema",
     "{",
@@ -182,6 +205,9 @@ export function buildAgentGenerationPrompt(input: {
     '      "delegatesTo": ["agent-name"],',
     '      "assignedSkillIds": ["existing-skill-id"],',
     '      "assignedMcpServerIds": ["existing-mcp-id"],',
+    '      "assignedBackend": "claude|codex|gemini|aider|custom",',
+    '      "assignedModel": "string",',
+    '      "backendAssignReason": "string",',
     '      "color": "#hex",',
     '      "avatar": "emoji"',
     "    }",
@@ -191,7 +217,16 @@ export function buildAgentGenerationPrompt(input: {
     "  ],",
     '  "suggestedNewMcpServers": [',
     '    { "name": "string", "kind": "stdio|http", "forAgent": "agent-name" }',
-    "  ]",
+    "  ],",
+    '  "workIntent": {',
+    '    "primaryCategory": "mixed",',
+    '    "secondaryCategories": ["refactor"],',
+    '    "categoryWeights": { "mixed": 1.0 },',
+    '    "suggestedRoles": [],',
+    '    "estimatedComplexity": "medium",',
+    '    "estimatedDuration": "hours"',
+    "  },",
+    '  "backendUsageAtBuild": []',
     "}",
     ""
   ].join("\n");

@@ -1,3 +1,5 @@
+import type { BackendUsageSummary } from "../messaging/protocol";
+
 type StatusBarProps = {
   skills: number;
   rules: number;
@@ -16,11 +18,18 @@ type StatusBarProps = {
   contextUsed: number;
   contextThreshold: number;
   contextState: "ok" | "warn" | "danger";
+  backendUsageSummaries: BackendUsageSummary[];
   showBuildNew: boolean;
   onBuildNew: () => void;
 };
 
 export default function StatusBar(props: StatusBarProps) {
+  const usageText = props.backendUsageSummaries
+    .slice()
+    .sort((left, right) => backendOrder(left.backendId) - backendOrder(right.backendId))
+    .map((summary) => `${shortBackendName(summary.backendId)} ${Math.round((1 - summary.availabilityScore) * 100)}%`)
+    .join(" · ");
+
   return (
     <div className="status-bar">
       <span>Skills {props.skills}</span>
@@ -36,6 +45,7 @@ export default function StatusBar(props: StatusBarProps) {
       <span className={`context-meter ${props.contextState}`}>
         Context {formatTokenCount(props.contextUsed)}/{formatTokenCount(props.contextThreshold)}
       </span>
+      <span>Backends {usageText || "-"}</span>
       <span>Flow {props.flowName}</span>
       <span>View {props.canvasView}</span>
       <span>Run {props.runId ?? "-"}</span>
@@ -56,4 +66,36 @@ function formatTokenCount(value: number): string {
     return `${Math.round(value / 1000)}k`;
   }
   return String(Math.round(value));
+}
+
+function backendOrder(backendId: BackendUsageSummary["backendId"]): number {
+  if (backendId === "claude") {
+    return 0;
+  }
+  if (backendId === "codex") {
+    return 1;
+  }
+  if (backendId === "gemini") {
+    return 2;
+  }
+  if (backendId === "aider") {
+    return 3;
+  }
+  return 4;
+}
+
+function shortBackendName(backendId: BackendUsageSummary["backendId"]): string {
+  if (backendId === "claude") {
+    return "C";
+  }
+  if (backendId === "codex") {
+    return "X";
+  }
+  if (backendId === "gemini") {
+    return "G";
+  }
+  if (backendId === "aider") {
+    return "A";
+  }
+  return "U";
 }

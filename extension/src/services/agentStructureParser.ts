@@ -1,5 +1,7 @@
 import { z } from "zod";
-import type { AgentRole, GeneratedAgentStructure } from "../types";
+import type { AgentRole, CanonicalBackendId, GeneratedAgentStructure } from "../types";
+import { normalizeBackendId } from "./backendProfiles";
+import { defaultWorkIntentAnalysis } from "./workIntentAnalyzer";
 
 const ROLE_SET = [
   "orchestrator",
@@ -22,6 +24,9 @@ const generatedAgentSchema = z.object({
   delegatesTo: z.array(z.string()).optional(),
   assignedSkillIds: z.array(z.string()).optional(),
   assignedMcpServerIds: z.array(z.string()).optional(),
+  assignedBackend: z.string().optional(),
+  assignedModel: z.string().optional(),
+  backendAssignReason: z.string().optional(),
   color: z.string().optional(),
   avatar: z.string().optional()
 });
@@ -47,7 +52,9 @@ const structureSchema = z.object({
         forAgent: z.string().optional()
       })
     )
-    .optional()
+    .optional(),
+  workIntent: z.unknown().optional(),
+  backendUsageAtBuild: z.array(z.unknown()).optional()
 });
 
 const ENGLISH_TASK_VERB_PREFIX =
@@ -71,6 +78,9 @@ export function parseAgentStructure(rawOutput: string): GeneratedAgentStructure 
     delegatesTo: dedupeArray(agent.delegatesTo),
     assignedSkillIds: dedupeArray(agent.assignedSkillIds),
     assignedMcpServerIds: dedupeArray(agent.assignedMcpServerIds),
+    assignedBackend: normalizeAssignedBackend(agent.assignedBackend),
+    assignedModel: trimOptional(agent.assignedModel),
+    backendAssignReason: trimOptional(agent.backendAssignReason),
     color: trimOptional(agent.color),
     avatar: trimOptional(agent.avatar)
   }));
@@ -87,7 +97,9 @@ export function parseAgentStructure(rawOutput: string): GeneratedAgentStructure 
       name: item.name.trim(),
       kind: item.kind ?? "stdio",
       forAgent: trimOptional(item.forAgent) || ""
-    }))
+    })),
+    workIntent: defaultWorkIntentAnalysis(),
+    backendUsageAtBuild: []
   };
 }
 
@@ -154,6 +166,14 @@ function dedupeArray(values: string[] | undefined): string[] {
     return [];
   }
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizeAssignedBackend(value: string | undefined): CanonicalBackendId {
+  const normalized = normalizeBackendId((value?.trim() || "claude") as never);
+  if (normalized === "claude" || normalized === "codex" || normalized === "gemini" || normalized === "aider" || normalized === "custom") {
+    return normalized;
+  }
+  return "claude";
 }
 
 function normalizeSuggestedSkills(

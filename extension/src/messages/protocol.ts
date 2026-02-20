@@ -1,6 +1,11 @@
 import type {
   AgentRuntime,
   AgentRole,
+  BackendBudget,
+  BackendUsageSummary,
+  ChatMessage,
+  ChatMode,
+  CanonicalBackendId,
   ContextPacket,
   CacheConfig,
   CacheMetrics,
@@ -20,6 +25,9 @@ import type {
   ProposalReview,
   PromptHistoryEntry,
   ReviewDecision,
+  WorkPlan,
+  WorkPlanModification,
+  TaskStatusUpdate,
   SessionContext,
   SkillPackPreview,
   TaskEvent,
@@ -116,7 +124,10 @@ export type WebviewToExtensionMessage =
       "GENERATE_AGENT_STRUCTURE",
       {
         prompt: string;
-        backendId: CliBackend["id"];
+        backendId?: CliBackend["id"];
+        preferredBackends?: CanonicalBackendId[];
+        useSmartAssignment?: boolean;
+        budgetConstraint?: "strict" | "soft";
         includeExistingAgents: boolean;
         includeExistingSkills: boolean;
         includeExistingMcpServers: boolean;
@@ -134,6 +145,21 @@ export type WebviewToExtensionMessage =
   | RequestMessage<"GET_PROMPT_HISTORY">
   | RequestMessage<"DELETE_PROMPT_HISTORY", { historyId: string }>
   | RequestMessage<"REAPPLY_PROMPT_HISTORY", { historyId: string }>
+  | RequestMessage<
+      "CHAT_SEND",
+      {
+        content: string;
+        mode: ChatMode;
+        backendId: Exclude<CliBackendId, "auto">;
+        modelId?: string;
+        attachments?: Array<{ type: "file" | "image"; path: string }>;
+      }
+    >
+  | RequestMessage<"WORK_PLAN_CONFIRM", { planId: string }>
+  | RequestMessage<"WORK_PLAN_MODIFY", { planId: string; modifications: WorkPlanModification[] }>
+  | RequestMessage<"WORK_PLAN_CANCEL", { planId: string }>
+  | RequestMessage<"TASK_STOP_FROM_CHAT", { taskId: string }>
+  | RequestMessage<"CHAT_GET_HISTORY", { limit?: number; before?: string } | undefined>
   | RequestMessage<"LIST_FLOWS">
   | RequestMessage<"LOAD_FLOW", { flowName: string }>
   | RequestMessage<"SAVE_FLOW", { flowName: string; nodes: DiscoverySnapshot["nodes"]; edges: DiscoverySnapshot["edges"] }>
@@ -205,6 +231,15 @@ export type WebviewToExtensionMessage =
   | RequestMessage<"SET_AGENT_RUNTIME", { agentId: string; runtime: AgentRuntime | null }>
   | RequestMessage<"SET_DEFAULT_BACKEND", { backendId: CliBackendId }>
   | RequestMessage<"SET_BACKEND_OVERRIDES", { overrides: CliBackendOverrides }>
+  | RequestMessage<"GET_BACKEND_USAGE", {
+      backendId?: CanonicalBackendId;
+      period?: "today" | "week" | "month";
+    } | undefined>
+  | RequestMessage<"SET_BACKEND_BUDGET", {
+      backendId: CanonicalBackendId;
+      budget: BackendBudget;
+    }>
+  | RequestMessage<"GET_BACKEND_BUDGETS">
   | RequestMessage<"LOG_INTERACTION_EVENT", {
       flowName: string;
       interactionId: string;
@@ -237,8 +272,15 @@ export type ExtensionToWebviewMessage =
   | { type: "MEMORY_QUERY_RESULT"; payload: MemoryQueryResult }
   | { type: "CONTEXT_PACKET_BUILT"; payload: { taskId: string; packet: ContextPacket } }
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
+  | { type: "CHAT_MESSAGE"; payload: { message: ChatMessage } }
+  | { type: "CHAT_STREAM_CHUNK"; payload: { messageId: string; chunk: string } }
+  | { type: "WORK_PLAN_UPDATED"; payload: { plan: WorkPlan } }
+  | { type: "TASK_STATUS_UPDATE"; payload: { update: TaskStatusUpdate } }
+  | { type: "CHAT_HISTORY"; payload: { messages: ChatMessage[] } }
   | { type: "SCHEDULE_EVENT"; payload: { event: TaskEvent } }
   | { type: "CACHE_METRICS_UPDATE"; payload: CacheMetrics }
+  | { type: "BACKEND_USAGE_UPDATE"; payload: { summaries: BackendUsageSummary[] } }
+  | { type: "BUDGET_WARNING"; payload: { backendId: CanonicalBackendId; type: "approaching" | "exceeded"; detail: string } }
   | { type: "CONTEXT_THRESHOLD_WARNING"; payload: { current: number; threshold: number } }
   | {
       type: "GENERATION_PROGRESS";

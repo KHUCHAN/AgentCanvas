@@ -2,7 +2,12 @@ import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { promisify } from "node:util";
-import type { CliBackend, CliBackendOverride, CliBackendOverrides } from "../types";
+import type {
+  BackendUsageSummary,
+  CliBackend,
+  CliBackendOverride,
+  CliBackendOverrides
+} from "../types";
 import { executeCliPrompt } from "./cliExecutor";
 
 const execFileAsync = promisify(execFile);
@@ -155,9 +160,29 @@ export async function testBackend(input: {
   }
 }
 
-export function pickPromptBackend(backends: CliBackend[], backendId: CliBackend["id"]): CliBackend {
+export function pickPromptBackend(
+  backends: CliBackend[],
+  backendId: CliBackend["id"],
+  usageSummaries?: BackendUsageSummary[]
+): CliBackend {
   const normalizedBackendId = normalizeBackendId(backendId);
   if (backendId === "auto") {
+    if (usageSummaries && usageSummaries.length > 0) {
+      const available = backends.filter((backend) => backend.available && backend.id !== "auto");
+      const byCanonicalId = new Map(
+        usageSummaries.map((summary) => [summary.backendId, summary] as const)
+      );
+      const ranked = [...available].sort((left, right) => {
+        const leftSummary = byCanonicalId.get(normalizeBackendId(left.id) as "claude" | "codex" | "gemini" | "aider" | "custom");
+        const rightSummary = byCanonicalId.get(normalizeBackendId(right.id) as "claude" | "codex" | "gemini" | "aider" | "custom");
+        const leftScore = leftSummary?.availabilityScore ?? 1;
+        const rightScore = rightSummary?.availabilityScore ?? 1;
+        return rightScore - leftScore;
+      });
+      if (ranked[0]) {
+        return ranked[0];
+      }
+    }
     const preferred = backends.find((backend) => backend.available && backend.id !== "auto");
     if (preferred) {
       return preferred;

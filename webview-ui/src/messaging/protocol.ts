@@ -48,6 +48,7 @@ export type CliBackendOverride = {
 };
 
 export type CliBackendOverrides = Partial<Record<Exclude<CliBackendId, "auto">, CliBackendOverride>>;
+export type CanonicalBackendId = "claude" | "codex" | "gemini" | "aider" | "custom";
 
 export type AgentRole =
   | "orchestrator"
@@ -220,6 +221,9 @@ export type GeneratedAgent = {
   delegatesTo: string[];
   assignedSkillIds: string[];
   assignedMcpServerIds: string[];
+  assignedBackend: CanonicalBackendId;
+  assignedModel?: string;
+  backendAssignReason?: string;
   color?: string;
   avatar?: string;
 };
@@ -236,12 +240,96 @@ export type SuggestedMcpServer = {
   forAgent: string;
 };
 
+export type WorkCategory =
+  | "new_feature"
+  | "bug_fix"
+  | "refactor"
+  | "code_review"
+  | "testing"
+  | "documentation"
+  | "research"
+  | "devops"
+  | "design"
+  | "data_pipeline"
+  | "full_stack"
+  | "mixed";
+
+export type WorkIntentAnalysis = {
+  primaryCategory: WorkCategory;
+  secondaryCategories: WorkCategory[];
+  categoryWeights: Partial<Record<WorkCategory, number>>;
+  suggestedRoles: Array<{
+    role: AgentRole;
+    count: number;
+    reason: string;
+    preferredBackend: CanonicalBackendId;
+    backendReason: string;
+  }>;
+  estimatedComplexity: "light" | "medium" | "heavy";
+  estimatedDuration: "minutes" | "hours" | "days";
+};
+
+export type BackendBudget = {
+  dailyMaxCost?: number;
+  weeklyMaxCost?: number;
+  monthlyMaxCost?: number;
+  dailyMaxCalls?: number;
+  weeklyMaxCalls?: number;
+  monthlyMaxCalls?: number;
+};
+
+export type BackendUsagePeriod = {
+  callCount: number;
+  totalTokens: number;
+  estimatedCost: number;
+  avgLatencyMs: number;
+  successRate: number;
+};
+
+export type BackendUsageRecord = {
+  backendId: CanonicalBackendId;
+  date: string;
+  callCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  estimatedCost: number;
+  avgLatencyMs: number;
+  errorCount: number;
+  successRate: number;
+  calls: Array<{
+    timestamp: string;
+    flowName?: string;
+    agentId?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    latencyMs: number;
+    model?: string;
+    success: boolean;
+    cost: number;
+  }>;
+};
+
+export type BackendUsageSummary = {
+  backendId: CanonicalBackendId;
+  today: BackendUsagePeriod;
+  thisWeek: BackendUsagePeriod;
+  thisMonth: BackendUsagePeriod;
+  budget?: BackendBudget;
+  availabilityScore: number;
+};
+
 export type GeneratedAgentStructure = {
   teamName: string;
   teamDescription: string;
   agents: GeneratedAgent[];
   suggestedNewSkills: SuggestedSkill[];
   suggestedNewMcpServers: SuggestedMcpServer[];
+  workIntent: WorkIntentAnalysis;
+  backendUsageAtBuild: BackendUsageSummary[];
 };
 
 export type PromptHistoryEntry = {
@@ -251,6 +339,92 @@ export type PromptHistoryEntry = {
   createdAt: string;
   applied: boolean;
   result: GeneratedAgentStructure;
+};
+
+export type ChatMode = "planning" | "direct" | "review";
+export type ChatMessageRole = "user" | "orchestrator" | "system";
+
+export type WorkPlanItem = {
+  index: number;
+  title: string;
+  description?: string;
+  assignedAgentId: string;
+  assignedAgentName: string;
+  assignedBackend: Exclude<CliBackendId, "auto">;
+  assignedModel?: string;
+  priority: "high" | "medium" | "low";
+  deps: number[];
+  taskId?: string;
+};
+
+export type WorkPlan = {
+  id: string;
+  status: "draft" | "confirmed" | "executing" | "completed" | "canceled";
+  items: WorkPlanItem[];
+  estimatedDuration?: string;
+  estimatedCost?: number;
+};
+
+export type WorkPlanModification = {
+  index: number;
+  title?: string;
+  description?: string;
+  priority?: WorkPlanItem["priority"];
+  assignedAgentId?: string;
+  assignedBackend?: Exclude<CliBackendId, "auto">;
+  deps?: number[];
+};
+
+export type TaskStatusUpdate = {
+  taskId: string;
+  title: string;
+  status: Task["status"];
+  progress: number;
+  agentName: string;
+  backendId: string;
+  message?: string;
+};
+
+export type TaskCompleteSummary = {
+  taskId: string;
+  title: string;
+  durationMs: number;
+  changedFiles: string[];
+  diffSummary?: string;
+  cost?: number;
+};
+
+export type FileDiffEntry = {
+  path: string;
+  additions: number;
+  deletions: number;
+  preview?: string;
+};
+
+export type ChatMessageContent =
+  | { kind: "text"; text: string }
+  | { kind: "work_plan"; plan: WorkPlan }
+  | { kind: "task_status"; taskId: string; status: TaskStatusUpdate }
+  | { kind: "task_complete"; taskId: string; summary: TaskCompleteSummary }
+  | { kind: "run_event"; event: RunEvent }
+  | { kind: "node_context"; nodeId: string; nodeType: string; data: Record<string, unknown> }
+  | { kind: "error"; message: string; recoverable: boolean }
+  | { kind: "cost_alert"; backendId: string; usage: BackendUsageSummary }
+  | { kind: "file_diff"; files: FileDiffEntry[] }
+  | { kind: "approval_request"; requestId: string; description: string; options: string[] };
+
+export type ChatMessage = {
+  id: string;
+  role: ChatMessageRole;
+  content: ChatMessageContent[];
+  timestamp: number;
+  metadata?: {
+    runId?: string;
+    taskIds?: string[];
+    backendId?: string;
+    model?: string;
+    tokens?: { input: number; output: number };
+  };
 };
 
 export type SkillPackPreviewItem = {
@@ -601,7 +775,10 @@ export type WebviewToExtensionMessage =
       "GENERATE_AGENT_STRUCTURE",
       {
         prompt: string;
-        backendId: CliBackend["id"];
+        backendId?: CliBackend["id"];
+        preferredBackends?: CanonicalBackendId[];
+        useSmartAssignment?: boolean;
+        budgetConstraint?: "strict" | "soft";
         includeExistingAgents: boolean;
         includeExistingSkills: boolean;
         includeExistingMcpServers: boolean;
@@ -619,6 +796,21 @@ export type WebviewToExtensionMessage =
   | RequestMessage<"GET_PROMPT_HISTORY">
   | RequestMessage<"DELETE_PROMPT_HISTORY", { historyId: string }>
   | RequestMessage<"REAPPLY_PROMPT_HISTORY", { historyId: string }>
+  | RequestMessage<
+      "CHAT_SEND",
+      {
+        content: string;
+        mode: ChatMode;
+        backendId: Exclude<CliBackendId, "auto">;
+        modelId?: string;
+        attachments?: Array<{ type: "file" | "image"; path: string }>;
+      }
+    >
+  | RequestMessage<"WORK_PLAN_CONFIRM", { planId: string }>
+  | RequestMessage<"WORK_PLAN_MODIFY", { planId: string; modifications: WorkPlanModification[] }>
+  | RequestMessage<"WORK_PLAN_CANCEL", { planId: string }>
+  | RequestMessage<"TASK_STOP_FROM_CHAT", { taskId: string }>
+  | RequestMessage<"CHAT_GET_HISTORY", { limit?: number; before?: string } | undefined>
   | RequestMessage<"LIST_FLOWS">
   | RequestMessage<"LOAD_FLOW", { flowName: string }>
   | RequestMessage<"SAVE_FLOW", { flowName: string; nodes: DiscoverySnapshot["nodes"]; edges: DiscoverySnapshot["edges"] }>
@@ -690,6 +882,15 @@ export type WebviewToExtensionMessage =
   | RequestMessage<"SET_AGENT_RUNTIME", { agentId: string; runtime: AgentRuntime | null }>
   | RequestMessage<"SET_DEFAULT_BACKEND", { backendId: CliBackendId }>
   | RequestMessage<"SET_BACKEND_OVERRIDES", { overrides: CliBackendOverrides }>
+  | RequestMessage<"GET_BACKEND_USAGE", {
+      backendId?: CanonicalBackendId;
+      period?: "today" | "week" | "month";
+    } | undefined>
+  | RequestMessage<"SET_BACKEND_BUDGET", {
+      backendId: CanonicalBackendId;
+      budget: BackendBudget;
+    }>
+  | RequestMessage<"GET_BACKEND_BUDGETS">
   | RequestMessage<"LOG_INTERACTION_EVENT", {
       flowName: string;
       interactionId: string;
@@ -722,8 +923,15 @@ export type ExtensionToWebviewMessage =
   | { type: "MEMORY_QUERY_RESULT"; payload: MemoryQueryResult }
   | { type: "CONTEXT_PACKET_BUILT"; payload: { taskId: string; packet: ContextPacket } }
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
+  | { type: "CHAT_MESSAGE"; payload: { message: ChatMessage } }
+  | { type: "CHAT_STREAM_CHUNK"; payload: { messageId: string; chunk: string } }
+  | { type: "WORK_PLAN_UPDATED"; payload: { plan: WorkPlan } }
+  | { type: "TASK_STATUS_UPDATE"; payload: { update: TaskStatusUpdate } }
+  | { type: "CHAT_HISTORY"; payload: { messages: ChatMessage[] } }
   | { type: "SCHEDULE_EVENT"; payload: { event: TaskEvent } }
   | { type: "CACHE_METRICS_UPDATE"; payload: CacheMetrics }
+  | { type: "BACKEND_USAGE_UPDATE"; payload: { summaries: BackendUsageSummary[] } }
+  | { type: "BUDGET_WARNING"; payload: { backendId: CanonicalBackendId; type: "approaching" | "exceeded"; detail: string } }
   | { type: "CONTEXT_THRESHOLD_WARNING"; payload: { current: number; threshold: number } }
   | {
       type: "GENERATION_PROGRESS";

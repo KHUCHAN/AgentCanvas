@@ -12,8 +12,13 @@ import {
 import type {
   AgentRuntime,
   AgentRole,
+  BackendBudget,
+  BackendUsageSummary,
   CacheConfig,
   CacheMetrics,
+  CanonicalBackendId,
+  ChatMessage,
+  ChatMode,
   CliBackend,
   CliBackendOverrides,
   DiscoverySnapshot,
@@ -34,6 +39,8 @@ import type {
   SkillPackPreview,
   Task,
   TaskEvent,
+  WorkPlan,
+  WorkPlanModification,
   TaskSubmissionOptions
 } from "./messaging/protocol";
 import type { PatternIndexItem, PatternTemplate } from "./patterns/types";
@@ -103,7 +110,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<DiscoverySnapshot>();
   const [selectedNode, setSelectedNode] = useState<Node>();
   const [selectedEdge, setSelectedEdge] = useState<Edge>();
-  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "task" | "run">("library");
+  const [panelMode, setPanelMode] = useState<"library" | "inspector" | "task" | "run" | "chat">("library");
   const [canvasMode, setCanvasMode] = useState<"kanban" | "graph" | "schedule">("graph");
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -124,6 +131,11 @@ export default function App() {
     agentName: string;
   } | null>(null);
   const [promptBackends, setPromptBackends] = useState<CliBackend[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatMode, setChatMode] = useState<ChatMode>("planning");
+  const [chatBackendId, setChatBackendId] = useState<Exclude<CliBackend["id"], "auto">>("claude");
+  const [chatModelId, setChatModelId] = useState("");
+  const [chatSending, setChatSending] = useState(false);
   const [promptHistory, setPromptHistory] = useState<PromptHistoryEntry[]>([]);
   const [generationProgress, setGenerationProgress] = useState<{
     stage: "building_prompt" | "calling_cli" | "parsing_output" | "done" | "error";
@@ -132,6 +144,10 @@ export default function App() {
   }>();
   const [buildPromptText, setBuildPromptText] = useState("");
   const [buildPromptBackendId, setBuildPromptBackendId] = useState<CliBackend["id"]>("auto");
+  const [buildPromptStrategy, setBuildPromptStrategy] = useState<"smart" | "manual">("smart");
+  const [buildPromptPreferredBackends, setBuildPromptPreferredBackends] = useState<CanonicalBackendId[]>([]);
+  const [buildPromptBudgetConstraint, setBuildPromptBudgetConstraint] = useState<"strict" | "soft">("soft");
+  const [backendUsageSummaries, setBackendUsageSummaries] = useState<BackendUsageSummary[]>([]);
   const [buildPromptIncludeExistingAgents, setBuildPromptIncludeExistingAgents] = useState(true);
   const [buildPromptIncludeExistingSkills, setBuildPromptIncludeExistingSkills] = useState(true);
   const [buildPromptIncludeExistingMcpServers, setBuildPromptIncludeExistingMcpServers] = useState(true);
@@ -170,6 +186,7 @@ export default function App() {
   const scheduleAnchorWallMsRef = useRef(Date.now());
   const scheduleRunIdRef = useRef<string>();
   const scheduleRunStateRef = useRef<Map<string, ScheduleRunState>>(new Map());
+  const lastContextCardKeyRef = useRef<string>();
 
   useEffect(() => {
     scheduleRunIdRef.current = scheduleRunId;
@@ -178,6 +195,10 @@ export default function App() {
   const showErrorToast = useCallback((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     setToast({ level: "error", message });
+  }, []);
+
+  const appendLocalChatMessage = useCallback((message: ChatMessage) => {
+    setChatMessages((previous) => [...previous, message].slice(-400));
   }, []);
 
   useEffect(() => {
@@ -241,9 +262,11 @@ export default function App() {
         setSelectedEdge,
         setImportPreview,
         setPromptBackends,
+        setBackendUsageSummaries,
         setPromptHistory,
         setGenerationProgress,
         setRunEvents,
+        setChatMessages,
         setCacheMetrics,
         setMemoryItems,
         setMemoryQueryResult,
@@ -261,6 +284,9 @@ export default function App() {
   useEffect(() => {
     void requestToExtension({ type: "DETECT_CLI_BACKENDS" }).catch(showErrorToast);
     void requestToExtension({ type: "GET_PROMPT_HISTORY" }).catch(showErrorToast);
+    void requestToExtension<{ summaries: BackendUsageSummary[] }>({ type: "GET_BACKEND_USAGE" })
+      .then((result) => setBackendUsageSummaries(result.summaries ?? []))
+      .catch(showErrorToast);
     void requestToExtension<{ config: CacheConfig }>({ type: "GET_CACHE_CONFIG" })
       .then((result) => setCacheConfig(result.config ?? DEFAULT_CACHE_CONFIG))
       .catch(showErrorToast);
@@ -428,6 +454,48 @@ export default function App() {
     () => scheduleViewState.tasks.find((task) => task.id === selectedScheduleTaskId),
     [scheduleViewState.tasks, selectedScheduleTaskId]
   );
+
+  useEffect(() => {
+    const key = selectedNode?.id
+      ? `node:${selectedNode.id}`
+      : selectedEdge?.id
+        ? `edge:${selectedEdge.id}`
+        : undefined;
+    if (!key || lastContextCardKeyRef.current === key) {
+      return;
+    }
+    lastContextCardKeyRef.current = key;
+
+    if (selectedNode) {
+      appendLocalChatMessage(
+        createLocalChatMessage("system", [
+          {
+            kind: "node_context",
+            nodeId: selectedNode.id,
+            nodeType: selectedNode.type || "node",
+            data: (selectedNode.data as Record<string, unknown>) ?? {}
+          }
+        ])
+      );
+    } else if (selectedEdge) {
+      appendLocalChatMessage(
+        createLocalChatMessage("system", [
+          {
+            kind: "node_context",
+            nodeId: selectedEdge.id,
+            nodeType: `edge:${selectedEdge.type ?? "unknown"}`,
+            data: {
+              source: selectedEdge.source,
+              target: selectedEdge.target,
+              label: selectedEdge.label
+            }
+          }
+        ])
+      );
+    }
+    setPanelMode("chat");
+    setPanelOpen(true);
+  }, [appendLocalChatMessage, selectedEdge, selectedNode]);
 
   const hasTeamReady = useMemo(() => {
     const customAgents =
@@ -806,7 +874,7 @@ export default function App() {
       setAgentCreationOpen(false);
       setForceBuildPrompt(false);
       setCanvasMode("kanban");
-      setPanelMode("inspector");
+      setPanelMode("chat");
       setPanelOpen(true);
     } catch (error) {
       showErrorToast(error);
@@ -837,7 +905,8 @@ export default function App() {
     try {
       await Promise.all([
         requestToExtension({ type: "DETECT_CLI_BACKENDS" }),
-        requestToExtension({ type: "GET_PROMPT_HISTORY" })
+        requestToExtension({ type: "GET_PROMPT_HISTORY" }),
+        requestToExtension({ type: "GET_BACKEND_USAGE" })
       ]);
     } catch (error) {
       showErrorToast(error);
@@ -847,9 +916,39 @@ export default function App() {
     }
   };
 
+  const refreshBackendUsage = useCallback(async () => {
+    const result = await requestToExtension<{ summaries: BackendUsageSummary[] }>({
+      type: "GET_BACKEND_USAGE"
+    });
+    setBackendUsageSummaries(result.summaries ?? []);
+  }, []);
+
+  const saveBackendBudget = useCallback(
+    async (backendId: CanonicalBackendId, budget: BackendBudget) => {
+      setBusy(true);
+      try {
+        const result = await requestToExtension<{ summaries: BackendUsageSummary[] }>({
+          type: "SET_BACKEND_BUDGET",
+          payload: { backendId, budget }
+        });
+        setBackendUsageSummaries(result.summaries ?? []);
+        setToast({ level: "info", message: `${backendId} budget saved.` });
+      } catch (error) {
+        showErrorToast(error);
+        throw error;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [showErrorToast]
+  );
+
   const generateAgentStructure = async (payload: {
     prompt: string;
-    backendId: CliBackend["id"];
+    backendId?: CliBackend["id"];
+    preferredBackends?: CanonicalBackendId[];
+    useSmartAssignment?: boolean;
+    budgetConstraint?: "strict" | "soft";
     includeExistingAgents: boolean;
     includeExistingSkills: boolean;
     includeExistingMcpServers: boolean;
@@ -872,7 +971,7 @@ export default function App() {
           historyId: result.historyEntry?.id
         });
       }
-      setPanelMode("inspector");
+      setPanelMode("chat");
       setPanelOpen(true);
     } catch (error) {
       showErrorToast(error);
@@ -889,12 +988,25 @@ export default function App() {
     }
     await generateAgentStructure({
       prompt,
-      backendId: buildPromptBackendId,
+      backendId: buildPromptStrategy === "manual" ? buildPromptBackendId : undefined,
+      preferredBackends:
+        buildPromptStrategy === "smart" ? buildPromptPreferredBackends : undefined,
+      useSmartAssignment: buildPromptStrategy === "smart",
+      budgetConstraint: buildPromptBudgetConstraint,
       includeExistingAgents: buildPromptIncludeExistingAgents,
       includeExistingSkills: buildPromptIncludeExistingSkills,
       includeExistingMcpServers: buildPromptIncludeExistingMcpServers
     });
   };
+
+  const togglePreferredBackend = useCallback((backendId: CanonicalBackendId) => {
+    setBuildPromptPreferredBackends((previous) => {
+      if (previous.includes(backendId)) {
+        return previous.filter((item) => item !== backendId);
+      }
+      return [...previous, backendId];
+    });
+  }, []);
 
   const applyGeneratedStructure = async (payload: {
     structure: GeneratedAgentStructure;
@@ -911,8 +1023,16 @@ export default function App() {
       setGeneratedPreview(undefined);
       setForceBuildPrompt(false);
       setCanvasMode("kanban");
-      setPanelMode("inspector");
+      setPanelMode("chat");
       setPanelOpen(true);
+      appendLocalChatMessage(
+        createLocalChatMessage("system", [
+          {
+            kind: "text",
+            text: `Team "${payload.structure.teamName}" is applied. Describe the work in Chat to start execution.`
+          }
+        ])
+      );
     } catch (error) {
       showErrorToast(error);
       throw error;
@@ -948,7 +1068,7 @@ export default function App() {
       );
       setForceBuildPrompt(false);
       setCanvasMode("kanban");
-      setPanelMode("inspector");
+      setPanelMode("chat");
       setPanelOpen(true);
     } catch (error) {
       showErrorToast(error);
@@ -1157,7 +1277,7 @@ export default function App() {
           }
         });
       }
-      setPanelMode("inspector");
+      setPanelMode("chat");
       setPanelOpen(true);
       setToast({
         level: "info",
@@ -1238,7 +1358,7 @@ export default function App() {
       setPatternEdges(loaded.flow.edges ?? []);
       setActiveFlowName(loaded.flow.flowName || selected);
       setToast({ level: "info", message: `Flow loaded: ${loaded.flow.flowName || selected}` });
-      setPanelMode("inspector");
+      setPanelMode("chat");
       setPanelOpen(true);
     } catch (error) {
       showErrorToast(error);
@@ -1316,8 +1436,53 @@ export default function App() {
     if (promptBackends.some((backend) => backend.id === buildPromptBackendId)) {
       return;
     }
-    setBuildPromptBackendId(promptBackends[0].id);
+    const fallback =
+      promptBackends.find((backend) => backend.id !== "auto" && backend.available)?.id ??
+      promptBackends[0].id;
+    setBuildPromptBackendId(fallback);
   }, [buildPromptBackendId, promptBackends]);
+
+  useEffect(() => {
+    const available = promptBackends.filter((backend) => backend.id !== "auto" && backend.available);
+    if (available.length === 0) {
+      return;
+    }
+    if (!available.some((backend) => backend.id === chatBackendId)) {
+      setChatBackendId(available[0].id as Exclude<CliBackend["id"], "auto">);
+    }
+  }, [chatBackendId, promptBackends]);
+
+  useEffect(() => {
+    if (buildPromptStrategy !== "manual") {
+      return;
+    }
+    if (buildPromptBackendId !== "auto") {
+      return;
+    }
+    const manualFallback =
+      promptBackends.find((backend) => backend.id !== "auto" && backend.available)?.id;
+    if (manualFallback) {
+      setBuildPromptBackendId(manualFallback);
+    }
+  }, [buildPromptBackendId, buildPromptStrategy, promptBackends]);
+
+  useEffect(() => {
+    if (promptBackends.length === 0) {
+      return;
+    }
+    const availableCanonical = new Set<CanonicalBackendId>();
+    for (const backend of promptBackends) {
+      const canonical = toCanonicalBackendId(backend.id);
+      if (!canonical || !backend.available) {
+        continue;
+      }
+      availableCanonical.add(canonical);
+    }
+
+    setBuildPromptPreferredBackends((previous) =>
+      previous.filter((backendId) => availableCanonical.has(backendId))
+    );
+  }, [promptBackends]);
 
   const runFlowFromPanel = async (payload: {
     flowName: string;
@@ -1353,7 +1518,7 @@ export default function App() {
       setSelectedRunId(result.runId);
       setCanvasMode("kanban");
       setForceBuildPrompt(false);
-      setPanelMode("run");
+      setPanelMode("chat");
       setPanelOpen(true);
       await subscribeScheduleRun(result.runId);
       await refreshRunHistory();
@@ -1408,7 +1573,7 @@ export default function App() {
       setActiveRunId(result.runId);
       setSelectedRunId(result.runId);
       setCanvasMode("kanban");
-      setPanelMode("run");
+      setPanelMode("chat");
       setPanelOpen(true);
       await subscribeScheduleRun(result.runId);
       await refreshRunHistory();
@@ -1549,6 +1714,66 @@ export default function App() {
     });
   };
 
+  const sendChatMessage = async (content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return;
+    }
+    setChatSending(true);
+    try {
+      await requestToExtension({
+        type: "CHAT_SEND",
+        payload: {
+          content: trimmed,
+          mode: chatMode,
+          backendId: chatBackendId,
+          modelId: chatModelId.trim() || undefined
+        }
+      });
+      setPanelMode("chat");
+      setPanelOpen(true);
+    } finally {
+      setChatSending(false);
+    }
+  };
+
+  const confirmChatPlan = async (planId: string) => {
+    await requestToExtension({
+      type: "WORK_PLAN_CONFIRM",
+      payload: { planId }
+    });
+    setCanvasMode("kanban");
+    setPanelMode("chat");
+    setPanelOpen(true);
+  };
+
+  const modifyChatPlan = async (planId: string, modifications: WorkPlanModification[]) => {
+    await requestToExtension({
+      type: "WORK_PLAN_MODIFY",
+      payload: { planId, modifications }
+    });
+    setPanelMode("chat");
+    setPanelOpen(true);
+  };
+
+  const cancelChatPlan = async (planId: string) => {
+    await requestToExtension({
+      type: "WORK_PLAN_CANCEL",
+      payload: { planId }
+    });
+    setPanelMode("chat");
+    setPanelOpen(true);
+  };
+
+  const stopTaskFromChat = async (taskId: string) => {
+    await requestToExtension({
+      type: "TASK_STOP_FROM_CHAT",
+      payload: { taskId }
+    });
+    setPanelMode("chat");
+    setPanelOpen(true);
+  };
+
   const moveScheduleTask = (taskId: string, forceStartMs: number, forceAgentId?: string) => {
     const runId = scheduleRunIdRef.current;
     if (!runId) {
@@ -1601,7 +1826,7 @@ export default function App() {
 
   const viewTaskDetailFromPanel = (taskId: string) => {
     setSelectedScheduleTaskId(taskId);
-    setPanelMode("run");
+    setPanelMode("chat");
     setPanelOpen(true);
   };
 
@@ -1758,15 +1983,15 @@ export default function App() {
     {
       id: "toggle-right-panel",
       title: panelOpen ? "Hide right panel" : "Show right panel",
-      subtitle: "Toggle inspector panel visibility",
+      subtitle: "Toggle chat panel visibility",
       run: () => setPanelOpen((open) => !open)
     },
     {
-      id: "panel-task",
-      title: "Open task panel",
-      subtitle: "Submit work and monitor active tasks",
+      id: "panel-chat",
+      title: "Open chat panel",
+      subtitle: "Chat with orchestrator to run work",
       run: () => {
-        setPanelMode("task");
+        setPanelMode("chat");
         setPanelOpen(true);
       }
     },
@@ -2019,36 +2244,14 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className={panelMode === "inspector" ? "active-toggle" : ""}
-                  title="Inspector"
+                  className={panelMode !== "library" ? "active-toggle" : ""}
+                  title="Chat"
                   onClick={() => {
-                    setPanelMode("inspector");
+                    setPanelMode("chat");
                     setPanelOpen(true);
                   }}
                 >
-                  Inspector
-                </button>
-                <button
-                  type="button"
-                  className={panelMode === "task" ? "active-toggle" : ""}
-                  title="Task"
-                  onClick={() => {
-                    setPanelMode("task");
-                    setPanelOpen(true);
-                  }}
-                >
-                  Task
-                </button>
-                <button
-                  type="button"
-                  className={panelMode === "run" ? "active-toggle" : ""}
-                  title="Run"
-                  onClick={() => {
-                    setPanelMode("run");
-                    setPanelOpen(true);
-                  }}
-                >
-                  Run
+                  Chat
                 </button>
               </div>
             )}
@@ -2108,13 +2311,13 @@ export default function App() {
                     onSelectNode={(node) => {
                       setSelectedNode(node);
                       setSelectedEdge(undefined);
-                      setPanelMode("inspector");
+                      setPanelMode("chat");
                       setPanelOpen(true);
                     }}
                     onSelectEdge={(edge) => {
                       setSelectedEdge(edge);
                       setSelectedNode(undefined);
-                      setPanelMode("inspector");
+                      setPanelMode("chat");
                       setPanelOpen(true);
                     }}
                     onOpenFile={openFile}
@@ -2180,6 +2383,13 @@ export default function App() {
                 backends={promptBackends}
                 selectedBackend={buildPromptBackendId}
                 onBackendChange={setBuildPromptBackendId}
+                strategy={buildPromptStrategy}
+                onStrategyChange={setBuildPromptStrategy}
+                preferredBackends={buildPromptPreferredBackends}
+                onTogglePreferredBackend={togglePreferredBackend}
+                budgetConstraint={buildPromptBudgetConstraint}
+                onBudgetConstraintChange={setBuildPromptBudgetConstraint}
+                usageSummaries={backendUsageSummaries}
                 isBuilding={busy}
                 progress={generationProgress}
                 includeExistingAgents={buildPromptIncludeExistingAgents}
@@ -2239,6 +2449,20 @@ export default function App() {
               onTestBackend={testBackendFromPanel}
               onOpenRunLog={openRunLog}
               onOpenAgentDetail={(agentId, agentName) => setAgentDetailModal({ agentId, agentName })}
+              chatMessages={chatMessages}
+              chatMode={chatMode}
+              chatBackendId={chatBackendId}
+              chatModelId={chatModelId}
+              chatSending={chatSending}
+              onChatModeChange={setChatMode}
+              onChatBackendChange={setChatBackendId}
+              onChatModelChange={setChatModelId}
+              onChatSend={sendChatMessage}
+              onChatConfirmPlan={confirmChatPlan}
+              onChatModifyPlan={modifyChatPlan}
+              onChatCancelPlan={cancelChatPlan}
+              onChatStopTask={stopTaskFromChat}
+              onOpenBuildPrompt={() => setForceBuildPrompt(true)}
             />
           </ErrorBoundary>
         </div>
@@ -2261,6 +2485,7 @@ export default function App() {
           contextUsed={contextUsed}
           contextThreshold={cacheConfig.contextThreshold}
           contextState={contextState}
+          backendUsageSummaries={backendUsageSummaries}
           showBuildNew={!buildPromptExpanded}
           onBuildNew={() => {
             setForceBuildPrompt(true);
@@ -2278,6 +2503,7 @@ export default function App() {
         open={settingsOpen}
         cacheConfig={cacheConfig}
         cacheMetrics={cacheMetrics}
+        backendUsageSummaries={backendUsageSummaries}
         onClose={() => setSettingsOpen(false)}
         onRefreshDiscovery={refreshDiscovery}
         onSaveFlow={saveFlow}
@@ -2295,6 +2521,8 @@ export default function App() {
         onSaveCacheConfig={saveCacheConfig}
         onRefreshCacheMetrics={refreshCacheMetrics}
         onResetCacheMetrics={resetCacheMetrics}
+        onRefreshBackendUsage={refreshBackendUsage}
+        onSaveBackendBudget={saveBackendBudget}
       />
 
       <SkillWizardModal
@@ -2446,6 +2674,74 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function createLocalChatMessage(
+  role: ChatMessage["role"],
+  content: ChatMessage["content"],
+  metadata?: ChatMessage["metadata"]
+): ChatMessage {
+  return {
+    id: `chat:local:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    content,
+    timestamp: Date.now(),
+    metadata
+  };
+}
+
+function upsertWorkPlanMessage(messages: ChatMessage[], plan: WorkPlan): ChatMessage[] {
+  let found = false;
+  const next = messages.map((message) => {
+    let updatedThisMessage = false;
+    const mapped = message.content.map((content) => {
+      if (content.kind !== "work_plan" || content.plan.id !== plan.id) {
+        return content;
+      }
+      found = true;
+      updatedThisMessage = true;
+      return { ...content, plan };
+    });
+    if (!updatedThisMessage) {
+      return message;
+    }
+    return {
+      ...message,
+      content: mapped
+    };
+  });
+  if (found) {
+    return next;
+  }
+  return [...next, createLocalChatMessage("orchestrator", [{ kind: "work_plan", plan }])].slice(-400);
+}
+
+function appendChunkToChatMessages(messages: ChatMessage[], messageId: string, chunk: string): ChatMessage[] {
+  if (!chunk) {
+    return messages;
+  }
+  let found = false;
+  const next = messages.map((message) => {
+    if (message.id !== messageId) {
+      return message;
+    }
+    found = true;
+    const content = [...message.content];
+    const last = content[content.length - 1];
+    if (last && last.kind === "text") {
+      content[content.length - 1] = { kind: "text", text: `${last.text}${chunk}` };
+    } else {
+      content.push({ kind: "text", text: chunk });
+    }
+    return {
+      ...message,
+      content
+    };
+  });
+  if (found) {
+    return next;
+  }
+  return [...next, createLocalChatMessage("orchestrator", [{ kind: "text", text: chunk }])].slice(-400);
+}
+
 function handleExtensionMessage(
   message: ExtensionToWebviewMessage,
   handlers: {
@@ -2456,6 +2752,7 @@ function handleExtensionMessage(
     setSelectedEdge: (edge: Edge | undefined) => void;
     setImportPreview: (preview: SkillPackPreview | undefined) => void;
     setPromptBackends: (backends: CliBackend[]) => void;
+    setBackendUsageSummaries: (summaries: BackendUsageSummary[]) => void;
     setPromptHistory: (items: PromptHistoryEntry[]) => void;
     setGenerationProgress: (progress: {
       stage: "building_prompt" | "calling_cli" | "parsing_output" | "done" | "error";
@@ -2463,6 +2760,7 @@ function handleExtensionMessage(
       progress?: number;
     } | undefined) => void;
     setRunEvents: (events: RunEvent[] | ((prev: RunEvent[]) => RunEvent[])) => void;
+    setChatMessages: (messages: ChatMessage[] | ((previous: ChatMessage[]) => ChatMessage[])) => void;
     setCacheMetrics: (metrics: CacheMetrics) => void;
     setMemoryItems: (items: MemoryItem[] | ((previous: MemoryItem[]) => MemoryItem[])) => void;
     setMemoryQueryResult: (result: MemoryQueryResult | undefined) => void;
@@ -2530,12 +2828,56 @@ function handleExtensionMessage(
       handlers.setPromptHistory(message.payload.items);
       return;
     }
+    case "CHAT_MESSAGE": {
+      handlers.setChatMessages((previous) => [...previous, message.payload.message].slice(-400));
+      return;
+    }
+    case "CHAT_HISTORY": {
+      handlers.setChatMessages(message.payload.messages);
+      return;
+    }
+    case "CHAT_STREAM_CHUNK": {
+      handlers.setChatMessages((previous) =>
+        appendChunkToChatMessages(previous, message.payload.messageId, message.payload.chunk)
+      );
+      return;
+    }
+    case "WORK_PLAN_UPDATED": {
+      handlers.setChatMessages((previous) => upsertWorkPlanMessage(previous, message.payload.plan));
+      return;
+    }
+    case "TASK_STATUS_UPDATE": {
+      handlers.setChatMessages((previous) =>
+        [
+          ...previous,
+          createLocalChatMessage("orchestrator", [
+            {
+              kind: "task_status",
+              taskId: message.payload.update.taskId,
+              status: message.payload.update
+            }
+          ])
+        ].slice(-400)
+      );
+      return;
+    }
     case "SCHEDULE_EVENT": {
       return;
     }
     case "CACHE_METRICS_UPDATE": {
       handlers.setCacheMetrics(message.payload);
       handlers.setContextThresholdWarning(undefined);
+      return;
+    }
+    case "BACKEND_USAGE_UPDATE": {
+      handlers.setBackendUsageSummaries(message.payload.summaries);
+      return;
+    }
+    case "BUDGET_WARNING": {
+      handlers.setToast({
+        level: message.payload.type === "exceeded" ? "warning" : "info",
+        message: message.payload.detail
+      });
       return;
     }
     case "CONTEXT_THRESHOLD_WARNING": {
@@ -2611,4 +2953,23 @@ function normalizeRole(value: string): AgentRole {
     return normalized;
   }
   return "custom";
+}
+
+function toCanonicalBackendId(backendId: CliBackend["id"]): CanonicalBackendId | undefined {
+  if (backendId === "claude" || backendId === "claude-code") {
+    return "claude";
+  }
+  if (backendId === "codex" || backendId === "codex-cli") {
+    return "codex";
+  }
+  if (backendId === "gemini" || backendId === "gemini-cli") {
+    return "gemini";
+  }
+  if (backendId === "aider") {
+    return "aider";
+  }
+  if (backendId === "custom") {
+    return "custom";
+  }
+  return undefined;
 }

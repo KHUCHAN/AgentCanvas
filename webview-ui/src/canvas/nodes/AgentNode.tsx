@@ -24,6 +24,11 @@ type AgentNodeData = {
   executionState?: "idle" | "thinking" | "working" | "error" | "done" | "blocked";
   currentTask?: string;
   progress?: number;
+  runtime?: {
+    kind?: "cli" | "openclaw";
+    backendId?: string;
+    modelId?: string;
+  };
 };
 
 export default function AgentNode({ data, selected }: NodeProps<AgentNodeData>) {
@@ -35,6 +40,8 @@ export default function AgentNode({ data, selected }: NodeProps<AgentNodeData>) 
   const stateLabel = stateLabelFor(executionState);
   const stateEffect = stateEffectFor(executionState);
   const showProgress = executionState === "working" || (typeof progress === "number" && progress > 0);
+  const runtimeBackend = resolveRuntimeBackendLabel(data.runtime);
+  const runtimeModel = data.runtime?.kind === "cli" ? data.runtime.modelId : undefined;
 
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
     const types = event.dataTransfer.types;
@@ -111,6 +118,12 @@ export default function AgentNode({ data, selected }: NodeProps<AgentNodeData>) 
       {data.description && <div className="node-desc">{data.description}</div>}
       <div className="node-meta">Skills: {data.skillCount ?? 0} · MCP: {data.mcpCount ?? 0}</div>
       <div className="node-meta">provider: {data.providerId}</div>
+      {(runtimeBackend || runtimeModel) && (
+        <div className="agent-runtime-row">
+          {runtimeBackend && <span className="agent-runtime-pill">{runtimeBackend}</span>}
+          {runtimeModel && <span className="agent-runtime-pill model">{runtimeModel}</span>}
+        </div>
+      )}
       <div className="agent-state-row">
         <span className={`agent-state-pill state-${executionState}`}>
           {stateIcon} {stateLabel}
@@ -201,4 +214,37 @@ function stateEffectFor(state: AgentNodeData["executionState"]): string | undefi
     return taskBlockedEffect;
   }
   return undefined;
+}
+
+function resolveRuntimeBackendLabel(
+  runtime: AgentNodeData["runtime"] | undefined
+): string | undefined {
+  if (!runtime) {
+    return undefined;
+  }
+  if (runtime.kind === "openclaw") {
+    return "OpenClaw";
+  }
+  if (runtime.kind !== "cli") {
+    return undefined;
+  }
+  if (!runtime.backendId || runtime.backendId === "auto") {
+    return "Auto";
+  }
+  if (runtime.backendId === "claude" || runtime.backendId === "claude-code") {
+    return "Claude";
+  }
+  if (runtime.backendId === "codex" || runtime.backendId === "codex-cli") {
+    return "Codex";
+  }
+  if (runtime.backendId === "gemini" || runtime.backendId === "gemini-cli") {
+    return "Gemini";
+  }
+  if (runtime.backendId === "aider") {
+    return "Aider";
+  }
+  if (runtime.backendId === "custom") {
+    return "Custom";
+  }
+  return runtime.backendId;
 }

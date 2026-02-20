@@ -1,6 +1,8 @@
 import { type DragEvent as ReactDragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Edge, Node } from "reactflow";
 import type {
+  ChatMessage,
+  ChatMode,
   CliBackend,
   CliBackendOverrides,
   DiscoverySnapshot,
@@ -8,24 +10,26 @@ import type {
   RunSummary,
   SessionContext,
   Task,
+  WorkPlanModification,
   Skill
 } from "../messaging/protocol";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { PatternIndexItem } from "../patterns/types";
+import ChatPanel from "./ChatPanel";
 import RunPanel from "./RunPanel";
 import InspectorVariables from "./InspectorVariables";
 import TaskPanel, { type TaskPanelOptions } from "./TaskPanel";
 import { getValidationCounts } from "../utils/validation";
 
 type RightPanelProps = {
-  mode: "library" | "inspector" | "task" | "run";
+  mode: "library" | "inspector" | "task" | "run" | "chat";
   open: boolean;
   saveSignal: number;
   snapshot?: DiscoverySnapshot;
   selectedNode?: Node;
   selectedScheduleTaskId?: string;
   selectedEdge?: Edge;
-  onModeChange: (mode: "library" | "inspector" | "task" | "run") => void;
+  onModeChange: (mode: "library" | "inspector" | "task" | "run" | "chat") => void;
   onOpenFile: (path: string) => void;
   onRevealPath: (path: string) => void;
   onCreateSkill: (name: string, description: string) => void;
@@ -85,12 +89,27 @@ type RightPanelProps = {
   }>;
   onOpenRunLog: (runId: string, flowName: string) => void;
   onOpenAgentDetail: (agentId: string, agentName: string) => void;
+  chatMessages: ChatMessage[];
+  chatMode: ChatMode;
+  chatBackendId: Exclude<CliBackend["id"], "auto">;
+  chatModelId?: string;
+  chatSending?: boolean;
+  onChatModeChange: (mode: ChatMode) => void;
+  onChatBackendChange: (backendId: Exclude<CliBackend["id"], "auto">) => void;
+  onChatModelChange: (modelId: string) => void;
+  onChatSend: (content: string) => Promise<void>;
+  onChatConfirmPlan: (planId: string) => Promise<void>;
+  onChatModifyPlan: (planId: string, modifications: WorkPlanModification[]) => Promise<void>;
+  onChatCancelPlan: (planId: string) => Promise<void>;
+  onChatStopTask: (taskId: string) => Promise<void>;
+  onOpenBuildPrompt: () => void;
 };
 
 type LibraryFilter = "all" | "skills" | "rules" | "agents";
 type LibrarySectionKey = "skills" | "agents" | "patterns" | "mcp" | "rules" | "newSkill";
 
 export default function RightPanel(props: RightPanelProps) {
+  const normalizedMode: "library" | "chat" = props.mode === "library" ? "library" : "chat";
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebouncedValue(query, 120);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
@@ -302,51 +321,31 @@ export default function RightPanel(props: RightPanelProps) {
       <div className="right-panel-tabs" role="tablist" aria-label="Right panel tabs">
         <button
           role="tab"
-          aria-selected={props.mode === "library"}
+          aria-selected={normalizedMode === "library"}
           aria-controls="right-panel-library"
-          className={props.mode === "library" ? "active" : ""}
+          className={normalizedMode === "library" ? "active" : ""}
           onClick={() => props.onModeChange("library")}
         >
           Node Library
         </button>
         <button
           role="tab"
-          aria-selected={props.mode === "inspector"}
-          aria-controls="right-panel-inspector"
-          className={props.mode === "inspector" ? "active" : ""}
-          onClick={() => props.onModeChange("inspector")}
+          aria-selected={normalizedMode === "chat"}
+          aria-controls="right-panel-chat"
+          className={normalizedMode === "chat" ? "active" : ""}
+          onClick={() => props.onModeChange("chat")}
         >
-          Inspector
-        </button>
-        <button
-          role="tab"
-          aria-selected={props.mode === "task"}
-          aria-controls="right-panel-task"
-          className={props.mode === "task" ? "active" : ""}
-          onClick={() => props.onModeChange("task")}
-        >
-          Task
-        </button>
-        <button
-          role="tab"
-          aria-selected={props.mode === "run"}
-          aria-controls="right-panel-run"
-          className={props.mode === "run" ? "active" : ""}
-          onClick={() => props.onModeChange("run")}
-        >
-          Run
+          Chat
         </button>
       </div>
 
-      {(props.mode === "task" || props.mode === "run") && (
+      {normalizedMode === "chat" && (
         <div className="panel-mode-subtitle">
-          {props.mode === "task"
-            ? "Task: submit work instructions and track current tasks."
-            : "Run: monitor execution sessions, timeline, and logs."}
+          Chat with the orchestrator to plan, run, and monitor work.
         </div>
       )}
 
-      {props.mode === "library" && (
+      {normalizedMode === "library" && (
         <div className="panel-content" id="right-panel-library" role="tabpanel">
           <div role="search">
             <input
@@ -647,6 +646,29 @@ export default function RightPanel(props: RightPanelProps) {
               )}
             </form>
           )}
+        </div>
+      )}
+
+      {normalizedMode === "chat" && (
+        <div className="panel-content" id="right-panel-chat" role="tabpanel">
+          <ChatPanel
+            hasTeam={(props.snapshot?.agents.length ?? 0) > 0}
+            messages={props.chatMessages}
+            mode={props.chatMode}
+            backendId={props.chatBackendId}
+            modelId={props.chatModelId}
+            backends={props.runBackends}
+            sending={props.chatSending}
+            onModeChange={props.onChatModeChange}
+            onBackendChange={props.onChatBackendChange}
+            onModelChange={props.onChatModelChange}
+            onSend={props.onChatSend}
+            onConfirmPlan={props.onChatConfirmPlan}
+            onModifyPlan={props.onChatModifyPlan}
+            onCancelPlan={props.onChatCancelPlan}
+            onStopTask={props.onChatStopTask}
+            onOpenBuildPrompt={props.onOpenBuildPrompt}
+          />
         </div>
       )}
 

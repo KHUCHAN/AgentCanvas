@@ -68,7 +68,7 @@ export default function KanbanView(props: KanbanViewProps) {
     return (
       <div className="kanban-empty">
         <div className="empty-title">No tasks yet</div>
-        <div className="empty-subtitle">Submit Work from the Task panel to populate this board.</div>
+        <div className="empty-subtitle">Use the Chat panel to ask the orchestrator for work.</div>
       </div>
     );
   }

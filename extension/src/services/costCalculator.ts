@@ -13,7 +13,14 @@ const DEFAULT_MODEL = "sonnet-4.5";
 const DEFAULT_PRICING: Record<string, PricingEntry> = {
   "sonnet-4.5": { input: 3.0, cacheWrite: 3.75, cacheRead: 0.3, output: 15.0 },
   "haiku-4.5": { input: 0.8, cacheWrite: 1.0, cacheRead: 0.08, output: 4.0 },
-  "opus-4.5": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 }
+  "opus-4.5": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 },
+  // Codex / OpenAI pricing
+  "o3-mini": { input: 1.1, cacheWrite: 0, cacheRead: 0, output: 4.4 },
+  "o3": { input: 10.0, cacheWrite: 0, cacheRead: 0, output: 40.0 },
+  "codex-1": { input: 5.0, cacheWrite: 0, cacheRead: 0, output: 20.0 },
+  // Gemini pricing
+  "gemini-2.5-flash": { input: 0.15, cacheWrite: 0.0375, cacheRead: 0.015, output: 0.6 },
+  "gemini-2.5-pro": { input: 1.25, cacheWrite: 0.3125, cacheRead: 0.125, output: 10.0 }
 };
 const PRICING = loadPricingTable();
 
@@ -21,7 +28,23 @@ export function resolvePricingModel(modelId?: string): string {
   if (!modelId) {
     return DEFAULT_MODEL;
   }
-  return PRICING[modelId] ? modelId : DEFAULT_MODEL;
+  if (PRICING[modelId]) {
+    return modelId;
+  }
+  const lower = modelId.toLowerCase();
+  if (lower.includes("gemini")) {
+    return "gemini-2.5-flash";
+  }
+  if (lower.includes("codex")) {
+    return "codex-1";
+  }
+  if (lower.includes("o3-mini")) {
+    return "o3-mini";
+  }
+  if (lower === "o3") {
+    return "o3";
+  }
+  return DEFAULT_MODEL;
 }
 
 export function calculateUsageCost(
