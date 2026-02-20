@@ -556,7 +556,7 @@ function GraphCanvas({
           title="Open node library (Ctrl/Cmd+L)"
           aria-label="Open node library"
         >
-          +
+          Library
         </button>
         <button
           className="canvas-add-agent"

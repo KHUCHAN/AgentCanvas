@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -7,7 +7,8 @@ import ReactFlow, {
   Node,
   NodeProps,
   NodeTypes,
-  ReactFlowProvider
+  ReactFlowProvider,
+  useReactFlow
 } from "reactflow";
 import "reactflow/dist/style.css";
 import type { AgentProfile, Task } from "../messaging/protocol";
@@ -47,6 +48,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
 }
 
 function ScheduleCanvas(props: ScheduleViewProps) {
+  const reactFlow = useReactFlow();
   const laneOrder = useMemo(() => {
     const seen = new Set<string>();
     const ordered: string[] = [];
@@ -90,6 +92,7 @@ function ScheduleCanvas(props: ScheduleViewProps) {
     () => Math.max(MIN_TIMELINE_WIDTH, timeToX(maxEndMs + TIMELINE_PADDING_MS, pxPerSec)),
     [maxEndMs, pxPerSec]
   );
+  const hasValidTimelineWindow = Number.isFinite(timelineWidth) && timelineWidth > 0 && laneOrder.length > 0;
 
   const staticNodes = useMemo<Node[]>(() => {
     const laneNodes: Node[] = laneOrder.map((agentId, index) => {
@@ -198,11 +201,52 @@ function ScheduleCanvas(props: ScheduleViewProps) {
     return result;
   }, [edgeColor, props.tasks]);
 
+  const taskLayoutFingerprint = useMemo(
+    () =>
+      props.tasks
+        .map(
+          (task) =>
+            `${task.id}:${task.agentId}:${task.plannedStartMs ?? 0}:${task.plannedEndMs ?? task.actualEndMs ?? 0}:${task.status}`
+        )
+        .join("|"),
+    [props.tasks]
+  );
+
+  useEffect(() => {
+    if (!props.runId || props.tasks.length === 0 || !hasValidTimelineWindow) {
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      reactFlow.fitView({ padding: 0.2, duration: 180 });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf);
+    };
+  }, [hasValidTimelineWindow, laneOrder.length, props.runId, props.tasks.length, reactFlow, taskLayoutFingerprint]);
+
   if (!props.runId) {
     return (
       <div className="schedule-empty">
         <div className="empty-title">No schedule run selected</div>
         <div className="empty-subtitle">Start a run from the Run panel, then switch to Schedule.</div>
+      </div>
+    );
+  }
+
+  if (props.tasks.length === 0) {
+    return (
+      <div className="schedule-empty">
+        <div className="empty-title">No scheduled tasks yet</div>
+        <div className="empty-subtitle">This run is active. Tasks will appear as the planner creates them.</div>
+      </div>
+    );
+  }
+
+  if (!hasValidTimelineWindow) {
+    return (
+      <div className="schedule-empty">
+        <div className="empty-title">Timeline unavailable</div>
+        <div className="empty-subtitle">Task timing is out of range. Adjust task timing or refresh the run.</div>
       </div>
     );
   }

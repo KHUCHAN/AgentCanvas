@@ -64,11 +64,20 @@ export default function KanbanView(props: KanbanViewProps) {
     return map;
   }, [props.tasks]);
 
-  if (!props.runId || props.tasks.length === 0) {
+  if (!props.runId) {
     return (
       <div className="kanban-empty">
         <div className="empty-title">No tasks yet</div>
-        <div className="empty-subtitle">Run a task from the Team panel to populate this board.</div>
+        <div className="empty-subtitle">Submit Work from the Task panel to populate this board.</div>
+      </div>
+    );
+  }
+
+  if (props.tasks.length === 0) {
+    return (
+      <div className="kanban-empty">
+        <div className="empty-title">Preparing tasks...</div>
+        <div className="empty-subtitle">A run is active. Tasks will appear here as the planner expands work.</div>
       </div>
     );
   }
@@ -93,6 +102,11 @@ export default function KanbanView(props: KanbanViewProps) {
                 event.preventDefault();
                 const droppedTaskId = event.dataTransfer.getData("application/agentcanvas-task") || dragTaskId;
                 if (!droppedTaskId) {
+                  return;
+                }
+                const droppedTask = props.tasks.find((task) => task.id === droppedTaskId);
+                if (!droppedTask) {
+                  setDragTaskId(undefined);
                   return;
                 }
                 props.onSetTaskStatus?.(droppedTaskId, mapColumnToStatus(column.id));

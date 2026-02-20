@@ -262,11 +262,12 @@ button {
 }
 
 .canvas-plus {
-  width: 34px;
   height: 34px;
+  min-width: 34px;
   border-radius: 10px;
-  padding: 0;
-  font-size: 18px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 620;
   line-height: 1;
 }
 
@@ -679,6 +680,9 @@ button {
   margin-top: 6px;
   font-size: 15px;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .node-desc {
@@ -706,7 +710,8 @@ button {
   margin-top: 8px;
   font-size: 10px;
   color: color-mix(in srgb, var(--fg) 70%, transparent);
-  word-break: break-all;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .node-validation {
@@ -801,6 +806,34 @@ button {
   gap: 12px;
 }
 
+.panel-mode-subtitle {
+  padding: 0 12px 8px;
+  font-size: 11px;
+  color: var(--fg-soft);
+  border-bottom: 1px solid var(--line);
+}
+
+.library-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.library-filter-row button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-soft) 92%, transparent);
+  color: var(--fg-soft);
+  font-size: 11px;
+  padding: 4px 10px;
+}
+
+.library-filter-row button.active {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--line-strong));
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
 .library-search,
 .new-skill-form input,
 .new-skill-form textarea,
@@ -831,6 +864,53 @@ button {
   padding: 10px;
 }
 
+#right-panel-library .library-block {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.library-section-header {
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.library-section-header:hover {
+  border: 0;
+  box-shadow: none;
+  transform: none;
+  background: transparent;
+}
+
+.library-section-header .library-title {
+  margin: 0;
+}
+
+.library-section-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-soft);
+}
+
+.library-section-caret {
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg-soft);
+}
+
+.right-panel .inspector-block {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
 .library-item {
   padding: 8px;
   margin-bottom: 8px;
@@ -842,6 +922,15 @@ button {
 
 .library-item.draggable:active {
   cursor: grabbing;
+}
+
+.library-item.is-dragging {
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+.item-main {
+  min-width: 0;
 }
 
 .library-title,
@@ -864,6 +953,14 @@ button {
 .command-item-subtitle {
   font-size: 12px;
   color: var(--fg-soft);
+}
+
+.item-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .modal-error {
@@ -1048,7 +1145,7 @@ button {
 .command-overlay {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 50;
   background: rgba(0, 0, 0, 0.38);
   display: grid;
   place-items: center;
@@ -1066,6 +1163,8 @@ button {
   background: color-mix(in srgb, var(--bg-elevated) 94%, #11141a 6%);
   box-shadow: var(--shadow);
   padding: 12px;
+  position: relative;
+  z-index: 51;
 }
 
 .command-bar {
@@ -1122,6 +1221,10 @@ button {
 .command-item-title {
   font-size: 14px;
   font-weight: 600;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .command-item-shortcut {
@@ -1161,7 +1264,7 @@ button {
   position: fixed;
   right: 16px;
   bottom: 16px;
-  z-index: 30;
+  z-index: 60;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
   padding: 9px 12px;
@@ -1195,6 +1298,7 @@ button {
   border-top: 1px solid var(--line);
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 12px;
   height: 24px;
   min-height: 24px;
@@ -1215,6 +1319,8 @@ button {
   position: relative;
   min-width: 0;
   min-height: 0;
+  width: 100%;
+  height: 100%;
   background-color: var(--bg);
   background-image:
     url("./assets/backgrounds/agentcanvas_bg_noise.svg"),
@@ -1222,6 +1328,11 @@ button {
   background-size: 200px 200px, 40px 40px;
   background-repeat: repeat, repeat;
   background-position: 0 0, 0 0;
+}
+
+.schedule-view .react-flow {
+  width: 100%;
+  height: 100%;
 }
 
 .schedule-empty {
@@ -1851,7 +1962,7 @@ button {
 
 .build-prompt-bar {
   position: absolute;
-  bottom: 24px;
+  bottom: 32px;
   left: 50%;
   transform: translateX(-50%);
   width: min(80%, 760px);
@@ -1944,6 +2055,12 @@ button {
   font-size: 28px;
   font-weight: 760;
   line-height: 1.05;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .build-prompt-subtitle {
@@ -2115,6 +2232,7 @@ button {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
 }
 
 .team-agent-role {
@@ -2125,6 +2243,11 @@ button {
 .team-agent-name {
   font-size: 14px;
   font-weight: 620;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .team-agent-meta,
@@ -2182,6 +2305,9 @@ button {
 .team-history-title {
   font-size: 13px;
   font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .team-selected-task {
@@ -2194,12 +2320,15 @@ button {
   display: flex;
   gap: 12px;
   padding: 14px;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .kanban-column {
   min-width: 270px;
   flex: 1;
+  min-height: 0;
+  max-height: 100%;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: color-mix(in srgb, var(--bg-soft) 94%, transparent);
@@ -2231,6 +2360,8 @@ button {
 }
 
 .kanban-column-body {
+  flex: 1;
+  min-height: 0;
   padding: 8px;
   display: grid;
   gap: 8px;
@@ -2276,6 +2407,9 @@ button {
 .kanban-card-title {
   font-size: 14px;
   font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kanban-card-agent {
@@ -2343,7 +2477,7 @@ button {
 
 .kanban-context-menu {
   position: fixed;
-  z-index: 40;
+  z-index: 70;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg-elevated) 96%, #0e1116 4%);
@@ -2361,11 +2495,6 @@ button {
   color: var(--fg);
   text-align: left;
   padding: 6px 8px;
-}
-
-.status-bar {
-  justify-content: flex-start;
-  padding: 0 10px;
 }
 
 .context-meter {
@@ -2511,5 +2640,27 @@ button {
 
   .settings-checkbox {
     grid-column: span 1;
+  }
+}
+
+@media (max-width: 800px) {
+  .kanban-board {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .kanban-column {
+    min-width: min(320px, calc(100vw - 36px));
+  }
+
+  .build-prompt-bar {
+    width: calc(100% - 16px);
+    left: 8px;
+    transform: none;
+    bottom: 36px;
+  }
+
+  .build-prompt-bar-select {
+    width: min(150px, 34vw);
   }
 }

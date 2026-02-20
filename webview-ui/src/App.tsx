@@ -1385,9 +1385,6 @@ export default function App() {
       instruction,
       taskOptions: options
     });
-    setPanelMode("task");
-    setCanvasMode("graph");
-    setPanelOpen(true);
   };
 
   const runNodeFromPanel = async (payload: {
@@ -2241,6 +2238,7 @@ export default function App() {
               onSetDefaultBackend={setDefaultBackend}
               onTestBackend={testBackendFromPanel}
               onOpenRunLog={openRunLog}
+              onOpenAgentDetail={(agentId, agentName) => setAgentDetailModal({ agentId, agentName })}
             />
           </ErrorBoundary>
         </div>

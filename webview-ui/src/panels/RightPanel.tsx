@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type DragEvent as ReactDragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Edge, Node } from "reactflow";
 import type {
   CliBackend,
@@ -84,16 +84,34 @@ type RightPanelProps = {
     outputPreview?: string;
   }>;
   onOpenRunLog: (runId: string, flowName: string) => void;
+  onOpenAgentDetail: (agentId: string, agentName: string) => void;
 };
+
+type LibraryFilter = "all" | "skills" | "rules" | "agents";
+type LibrarySectionKey = "skills" | "agents" | "patterns" | "mcp" | "rules" | "newSkill";
 
 export default function RightPanel(props: RightPanelProps) {
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebouncedValue(query, 120);
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
   const [skillName, setSkillName] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
   const [inspectorTab, setInspectorTab] = useState<"overview" | "variables">("overview");
   const [agentInspectorTab, setAgentInspectorTab] = useState<"overview" | "skills" | "rules" | "mcp">("overview");
   const [skillRenderLimit, setSkillRenderLimit] = useState(160);
+  const [agentRenderLimit, setAgentRenderLimit] = useState(120);
+  const [ruleRenderLimit, setRuleRenderLimit] = useState(120);
+  const [mcpRenderLimit, setMcpRenderLimit] = useState(120);
+  const [patternRenderLimit, setPatternRenderLimit] = useState(120);
+  const [collapsedSections, setCollapsedSections] = useState<Record<LibrarySectionKey, boolean>>({
+    skills: false,
+    agents: false,
+    patterns: false,
+    mcp: false,
+    rules: false,
+    newSkill: false
+  });
+  const previousSelectedTypeRef = useRef<string>();
 
   useEffect(() => {
     if (props.mode !== "inspector") {
@@ -110,28 +128,90 @@ export default function RightPanel(props: RightPanelProps) {
   }, [props.mode]);
 
   const skills = props.snapshot?.skills ?? [];
+  const agents = props.snapshot?.agents ?? [];
   const rules = props.snapshot?.ruleDocs ?? [];
   const mcpServers = props.snapshot?.mcpServers ?? [];
+  const normalizedQuery = debouncedQuery.trim().toLowerCase();
 
   const filteredSkills = useMemo(() => {
-    const normalized = debouncedQuery.trim().toLowerCase();
-    if (!normalized) {
+    if (!normalizedQuery) {
       return skills;
     }
     return skills.filter(
       (skill) =>
-        skill.name.toLowerCase().includes(normalized) ||
-        skill.description.toLowerCase().includes(normalized)
+        skill.name.toLowerCase().includes(normalizedQuery) ||
+        skill.description.toLowerCase().includes(normalizedQuery)
     );
-  }, [debouncedQuery, skills]);
+  }, [normalizedQuery, skills]);
+
+  const filteredAgents = useMemo(() => {
+    if (!normalizedQuery) {
+      return agents;
+    }
+    return agents.filter((agent) => {
+      const roleText = agent.roleLabel || agent.role;
+      return (
+        agent.name.toLowerCase().includes(normalizedQuery) ||
+        agent.providerId.toLowerCase().includes(normalizedQuery) ||
+        roleText.toLowerCase().includes(normalizedQuery)
+      );
+    });
+  }, [agents, normalizedQuery]);
+
+  const filteredRules = useMemo(() => {
+    if (!normalizedQuery) {
+      return rules;
+    }
+    return rules.filter((rule) =>
+      `${rule.path} ${rule.providerId} ${rule.scope}`.toLowerCase().includes(normalizedQuery)
+    );
+  }, [normalizedQuery, rules]);
+
+  const filteredMcpServers = useMemo(() => {
+    if (!normalizedQuery) {
+      return mcpServers;
+    }
+    return mcpServers.filter((server) =>
+      `${server.name} ${server.kind} ${server.providerId}`.toLowerCase().includes(normalizedQuery)
+    );
+  }, [mcpServers, normalizedQuery]);
+
+  const filteredPatterns = useMemo(() => {
+    if (!normalizedQuery) {
+      return props.interactionPatterns;
+    }
+    return props.interactionPatterns.filter((pattern) =>
+      `${pattern.name} ${pattern.summary ?? ""} ${pattern.id}`.toLowerCase().includes(normalizedQuery)
+    );
+  }, [normalizedQuery, props.interactionPatterns]);
 
   useEffect(() => {
     setSkillRenderLimit(160);
+    setAgentRenderLimit(120);
+    setRuleRenderLimit(120);
+    setMcpRenderLimit(120);
+    setPatternRenderLimit(120);
   }, [debouncedQuery]);
 
   const visibleSkills = useMemo(
     () => filteredSkills.slice(0, skillRenderLimit),
     [filteredSkills, skillRenderLimit]
+  );
+  const visibleAgents = useMemo(
+    () => filteredAgents.slice(0, agentRenderLimit),
+    [agentRenderLimit, filteredAgents]
+  );
+  const visibleRules = useMemo(
+    () => filteredRules.slice(0, ruleRenderLimit),
+    [filteredRules, ruleRenderLimit]
+  );
+  const visibleMcpServers = useMemo(
+    () => filteredMcpServers.slice(0, mcpRenderLimit),
+    [filteredMcpServers, mcpRenderLimit]
+  );
+  const visiblePatterns = useMemo(
+    () => filteredPatterns.slice(0, patternRenderLimit),
+    [filteredPatterns, patternRenderLimit]
   );
 
   const selectedType = props.selectedNode?.type;
@@ -162,10 +242,46 @@ export default function RightPanel(props: RightPanelProps) {
     [props.snapshot?.mcpServers, selectedAgentId]
   );
   useEffect(() => {
-    if (selectedType === "agent") {
+    const previousType = previousSelectedTypeRef.current;
+    if (selectedType === "agent" && previousType !== "agent") {
       setAgentInspectorTab("overview");
     }
-  }, [selectedType, selectedAgentId]);
+    previousSelectedTypeRef.current = selectedType;
+  }, [selectedType]);
+
+  const toggleLibrarySection = useCallback((section: LibrarySectionKey) => {
+    setCollapsedSections((current) => ({
+      ...current,
+      [section]: !current[section]
+    }));
+  }, []);
+
+  const beginDragPreview = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    event.currentTarget.classList.add("is-dragging");
+  }, []);
+
+  const endDragPreview = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    event.currentTarget.classList.remove("is-dragging");
+  }, []);
+
+  const libraryHasMatches = useMemo(() => {
+    if (libraryFilter === "skills") {
+      return filteredSkills.length > 0;
+    }
+    if (libraryFilter === "rules") {
+      return filteredRules.length > 0;
+    }
+    if (libraryFilter === "agents") {
+      return filteredAgents.length > 0;
+    }
+    return (
+      filteredSkills.length > 0 ||
+      filteredAgents.length > 0 ||
+      filteredRules.length > 0 ||
+      filteredMcpServers.length > 0 ||
+      filteredPatterns.length > 0
+    );
+  }, [filteredAgents.length, filteredMcpServers.length, filteredPatterns.length, filteredRules.length, filteredSkills.length, libraryFilter]);
 
   if (!props.open) {
     return null;
@@ -222,6 +338,14 @@ export default function RightPanel(props: RightPanelProps) {
         </button>
       </div>
 
+      {(props.mode === "task" || props.mode === "run") && (
+        <div className="panel-mode-subtitle">
+          {props.mode === "task"
+            ? "Task: submit work instructions and track current tasks."
+            : "Run: monitor execution sessions, timeline, and logs."}
+        </div>
+      )}
+
       {props.mode === "library" && (
         <div className="panel-content" id="right-panel-library" role="tabpanel">
           <div role="search">
@@ -229,126 +353,300 @@ export default function RightPanel(props: RightPanelProps) {
               className="library-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search skills..."
+              placeholder="Search library..."
             />
           </div>
+          <div className="library-filter-row" role="tablist" aria-label="Library filters">
+            <button
+              type="button"
+              className={libraryFilter === "all" ? "active" : ""}
+              onClick={() => setLibraryFilter("all")}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className={libraryFilter === "skills" ? "active" : ""}
+              onClick={() => setLibraryFilter("skills")}
+            >
+              Skills
+            </button>
+            <button
+              type="button"
+              className={libraryFilter === "rules" ? "active" : ""}
+              onClick={() => setLibraryFilter("rules")}
+            >
+              Rules
+            </button>
+            <button
+              type="button"
+              className={libraryFilter === "agents" ? "active" : ""}
+              onClick={() => setLibraryFilter("agents")}
+            >
+              Agents
+            </button>
+          </div>
 
-          <div className="library-block">
-            <div className="library-title">Skills</div>
-            {visibleSkills.map((skill) => (
-              <LibrarySkillItem
-                key={skill.id}
-                skill={skill}
-                onOpen={props.onOpenFile}
-                onReveal={props.onRevealPath}
-                onValidate={props.onValidateSkill}
-                onExport={(id) => props.onExportSkills([id])}
-              />
-            ))}
-            {filteredSkills.length === 0 && <div className="muted">No matching skills</div>}
-            {filteredSkills.length > visibleSkills.length && (
-              <button type="button" onClick={() => setSkillRenderLimit((current) => current + 160)}>
-                Load more ({filteredSkills.length - visibleSkills.length} remaining)
+          {!libraryHasMatches && <div className="muted">No matching items</div>}
+
+          {(libraryFilter === "all" || libraryFilter === "skills") && (
+            <div className="library-block">
+              <button
+                type="button"
+                className="library-section-header"
+                onClick={() => toggleLibrarySection("skills")}
+              >
+                <span className="library-title">Skills</span>
+                <span className="library-section-meta">
+                  {filteredSkills.length} / {skills.length}
+                </span>
+                <span className="library-section-caret">{collapsedSections.skills ? "+" : "-"}</span>
               </button>
-            )}
-          </div>
+              {!collapsedSections.skills && (
+                <>
+                  {visibleSkills.map((skill) => (
+                    <LibrarySkillItem
+                      key={skill.id}
+                      skill={skill}
+                      onOpen={props.onOpenFile}
+                      onReveal={props.onRevealPath}
+                      onValidate={props.onValidateSkill}
+                      onExport={(id) => props.onExportSkills([id])}
+                    />
+                  ))}
+                  {filteredSkills.length === 0 && <div className="muted">No matching skills</div>}
+                  {filteredSkills.length > visibleSkills.length && (
+                    <button type="button" onClick={() => setSkillRenderLimit((current) => current + 160)}>
+                      Load more ({filteredSkills.length - visibleSkills.length} remaining)
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
-          <div className="library-block">
-            <div className="library-title">Interaction Patterns</div>
-            {props.interactionPatterns.map((pattern) => (
-              <div
-                key={pattern.id}
-                className="library-item draggable"
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData(
-                    "application/agentcanvas-pattern",
-                    JSON.stringify({ id: pattern.id, name: pattern.name })
-                  );
-                  event.dataTransfer.effectAllowed = "copy";
-                }}
+          {(libraryFilter === "all" || libraryFilter === "agents") && (
+            <div className="library-block">
+              <button
+                type="button"
+                className="library-section-header"
+                onClick={() => toggleLibrarySection("agents")}
               >
-                <div className="item-main">
-                  <div className="item-title">{pattern.name}</div>
-                  <div className="item-subtitle">{pattern.summary || pattern.id}</div>
-                  <div className="item-badges">
-                    {pattern.topology && <span className="pill">{pattern.topology}</span>}
-                    {pattern.nodeCount !== undefined && <span className="pill">N {pattern.nodeCount}</span>}
-                    {pattern.edgeCount !== undefined && <span className="pill">E {pattern.edgeCount}</span>}
-                  </div>
-                </div>
-                <div className="item-actions">
-                  <button
-                    onClick={() => {
-                      void props.onInsertPattern(pattern.id).catch(() => undefined);
-                    }}
-                  >
-                    Insert
-                  </button>
-                </div>
-              </div>
-            ))}
-            {props.interactionPatterns.length === 0 && <div className="muted">No interaction patterns found</div>}
-          </div>
+                <span className="library-title">Agents</span>
+                <span className="library-section-meta">
+                  {filteredAgents.length} / {agents.length}
+                </span>
+                <span className="library-section-caret">{collapsedSections.agents ? "+" : "-"}</span>
+              </button>
+              {!collapsedSections.agents && (
+                <>
+                  {visibleAgents.map((agent) => (
+                    <div key={agent.id} className="library-item">
+                      <div className="item-main">
+                        <div className="item-title">{agent.name}</div>
+                        <div className="item-subtitle">
+                          {agent.roleLabel || agent.role} · {agent.providerId}
+                        </div>
+                      </div>
+                      <div className="item-actions">
+                        <button type="button" onClick={() => props.onOpenAgentDetail(agent.id, agent.name)}>
+                          Open
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredAgents.length === 0 && <div className="muted">No matching agents</div>}
+                  {filteredAgents.length > visibleAgents.length && (
+                    <button type="button" onClick={() => setAgentRenderLimit((current) => current + 120)}>
+                      Load more ({filteredAgents.length - visibleAgents.length} remaining)
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
-          <div className="library-block">
-            <div className="library-title">MCP Servers</div>
-            {mcpServers.map((server) => (
-              <div
-                key={server.id}
-                className="library-item draggable"
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData(
-                    "application/agentcanvas-mcp",
-                    JSON.stringify({
-                      type: "mcp",
-                      id: server.id,
-                      name: server.name
-                    })
-                  );
-                  event.dataTransfer.effectAllowed = "copy";
-                }}
+          {libraryFilter === "all" && (
+            <div className="library-block">
+              <button
+                type="button"
+                className="library-section-header"
+                onClick={() => toggleLibrarySection("patterns")}
               >
-                <div className="item-main">
-                  <div className="item-title">{server.name}</div>
-                  <div className="item-subtitle">{server.kind} · {server.providerId}</div>
-                </div>
-              </div>
-            ))}
-            {mcpServers.length === 0 && <div className="muted">No MCP servers discovered</div>}
-          </div>
+                <span className="library-title">Interaction Patterns</span>
+                <span className="library-section-meta">
+                  {filteredPatterns.length} / {props.interactionPatterns.length}
+                </span>
+                <span className="library-section-caret">{collapsedSections.patterns ? "+" : "-"}</span>
+              </button>
+              {!collapsedSections.patterns && (
+                <>
+                  {visiblePatterns.map((pattern) => (
+                    <div
+                      key={pattern.id}
+                      className="library-item draggable"
+                      draggable
+                      onDragStart={(event) => {
+                        beginDragPreview(event);
+                        event.dataTransfer.setData(
+                          "application/agentcanvas-pattern",
+                          JSON.stringify({ id: pattern.id, name: pattern.name })
+                        );
+                        event.dataTransfer.effectAllowed = "copy";
+                      }}
+                      onDragEnd={endDragPreview}
+                    >
+                      <div className="item-main">
+                        <div className="item-title">{pattern.name}</div>
+                        <div className="item-subtitle">{pattern.summary || pattern.id}</div>
+                        <div className="item-badges">
+                          {pattern.topology && <span className="pill">{pattern.topology}</span>}
+                          {pattern.nodeCount !== undefined && <span className="pill">N {pattern.nodeCount}</span>}
+                          {pattern.edgeCount !== undefined && <span className="pill">E {pattern.edgeCount}</span>}
+                        </div>
+                      </div>
+                      <div className="item-actions">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void props.onInsertPattern(pattern.id).catch(() => undefined);
+                          }}
+                        >
+                          Insert
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredPatterns.length === 0 && <div className="muted">No interaction patterns found</div>}
+                  {filteredPatterns.length > visiblePatterns.length && (
+                    <button type="button" onClick={() => setPatternRenderLimit((current) => current + 120)}>
+                      Load more ({filteredPatterns.length - visiblePatterns.length} remaining)
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
-          <div className="library-block">
-            <div className="library-title">Rule Docs</div>
-            {rules.map((rule) => (
-              <div key={rule.id} className="library-item">
-                <div className="item-main">{rule.path}</div>
-                <div className="item-actions">
-                  <button onClick={() => props.onOpenFile(rule.path)}>Open</button>
-                  <button onClick={() => props.onCreateOverride(rule.path)}>Override</button>
-                  <button onClick={() => props.onRevealPath(rule.path)}>Reveal</button>
-                </div>
-              </div>
-            ))}
-            {rules.length === 0 && <div className="muted">No rules detected</div>}
-          </div>
+          {libraryFilter === "all" && (
+            <div className="library-block">
+              <button
+                type="button"
+                className="library-section-header"
+                onClick={() => toggleLibrarySection("mcp")}
+              >
+                <span className="library-title">MCP Servers</span>
+                <span className="library-section-meta">
+                  {filteredMcpServers.length} / {mcpServers.length}
+                </span>
+                <span className="library-section-caret">{collapsedSections.mcp ? "+" : "-"}</span>
+              </button>
+              {!collapsedSections.mcp && (
+                <>
+                  {visibleMcpServers.map((server) => (
+                    <div
+                      key={server.id}
+                      className="library-item draggable"
+                      draggable
+                      onDragStart={(event) => {
+                        beginDragPreview(event);
+                        event.dataTransfer.setData(
+                          "application/agentcanvas-mcp",
+                          JSON.stringify({
+                            type: "mcp",
+                            id: server.id,
+                            name: server.name
+                          })
+                        );
+                        event.dataTransfer.effectAllowed = "copy";
+                      }}
+                      onDragEnd={endDragPreview}
+                    >
+                      <div className="item-main">
+                        <div className="item-title">{server.name}</div>
+                        <div className="item-subtitle">{server.kind} · {server.providerId}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredMcpServers.length === 0 && <div className="muted">No MCP servers discovered</div>}
+                  {filteredMcpServers.length > visibleMcpServers.length && (
+                    <button type="button" onClick={() => setMcpRenderLimit((current) => current + 120)}>
+                      Load more ({filteredMcpServers.length - visibleMcpServers.length} remaining)
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
-          <form className="new-skill-form" onSubmit={handleCreateSkill}>
-            <div className="library-title">New Skill</div>
-            <input
-              value={skillName}
-              onChange={(event) => setSkillName(event.target.value)}
-              placeholder="name (kebab-case)"
-            />
-            <textarea
-              value={skillDescription}
-              onChange={(event) => setSkillDescription(event.target.value)}
-              placeholder="description"
-              rows={3}
-            />
-            <button type="submit">Create</button>
-          </form>
+          {(libraryFilter === "all" || libraryFilter === "rules") && (
+            <div className="library-block">
+              <button
+                type="button"
+                className="library-section-header"
+                onClick={() => toggleLibrarySection("rules")}
+              >
+                <span className="library-title">Rule Docs</span>
+                <span className="library-section-meta">
+                  {filteredRules.length} / {rules.length}
+                </span>
+                <span className="library-section-caret">{collapsedSections.rules ? "+" : "-"}</span>
+              </button>
+              {!collapsedSections.rules && (
+                <>
+                  {visibleRules.map((rule) => (
+                    <div key={rule.id} className="library-item">
+                      <div className="item-main">
+                        <div className="item-title">{rule.providerId}</div>
+                        <div className="item-subtitle">{rule.path}</div>
+                      </div>
+                      <div className="item-actions">
+                        <button type="button" onClick={() => props.onOpenFile(rule.path)}>Open</button>
+                        <button type="button" onClick={() => props.onCreateOverride(rule.path)}>Override</button>
+                        <button type="button" onClick={() => props.onRevealPath(rule.path)}>Reveal</button>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredRules.length === 0 && <div className="muted">No matching rules</div>}
+                  {filteredRules.length > visibleRules.length && (
+                    <button type="button" onClick={() => setRuleRenderLimit((current) => current + 120)}>
+                      Load more ({filteredRules.length - visibleRules.length} remaining)
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {(libraryFilter === "all" || libraryFilter === "skills") && (
+            <form className="new-skill-form" onSubmit={handleCreateSkill}>
+              <button
+                type="button"
+                className="library-section-header"
+                onClick={() => toggleLibrarySection("newSkill")}
+              >
+                <span className="library-title">New Skill</span>
+                <span className="library-section-meta">Create</span>
+                <span className="library-section-caret">{collapsedSections.newSkill ? "+" : "-"}</span>
+              </button>
+              {!collapsedSections.newSkill && (
+                <>
+                  <input
+                    value={skillName}
+                    onChange={(event) => setSkillName(event.target.value)}
+                    placeholder="name (kebab-case)"
+                  />
+                  <textarea
+                    value={skillDescription}
+                    onChange={(event) => setSkillDescription(event.target.value)}
+                    placeholder="description"
+                    rows={3}
+                  />
+                  <button type="submit">Create</button>
+                </>
+              )}
+            </form>
+          )}
         </div>
       )}
 
@@ -601,6 +899,7 @@ function LibrarySkillItem(props: {
       className="library-item draggable"
       draggable
       onDragStart={(event) => {
+        event.currentTarget.classList.add("is-dragging");
         event.dataTransfer.setData(
           "application/agentcanvas-skill",
           JSON.stringify({
@@ -610,6 +909,9 @@ function LibrarySkillItem(props: {
           })
         );
         event.dataTransfer.effectAllowed = "copy";
+      }}
+      onDragEnd={(event) => {
+        event.currentTarget.classList.remove("is-dragging");
       }}
     >
       <div className="item-main">
@@ -621,10 +923,10 @@ function LibrarySkillItem(props: {
         </div>
       </div>
       <div className="item-actions">
-        <button onClick={() => props.onOpen(props.skill.path)}>Open</button>
-        <button onClick={() => props.onReveal(props.skill.path)}>Reveal</button>
-        <button onClick={() => props.onValidate(props.skill.id)}>Validate</button>
-        <button onClick={() => props.onExport(props.skill.id)}>Export</button>
+        <button type="button" onClick={() => props.onOpen(props.skill.path)}>Open</button>
+        <button type="button" onClick={() => props.onReveal(props.skill.path)}>Reveal</button>
+        <button type="button" onClick={() => props.onValidate(props.skill.id)}>Validate</button>
+        <button type="button" onClick={() => props.onExport(props.skill.id)}>Export</button>
       </div>
     </div>
   );
