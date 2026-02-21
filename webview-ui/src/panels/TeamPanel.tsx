@@ -10,6 +10,7 @@ type TeamPanelProps = {
   selectedTask?: Task;
   busy: boolean;
   onCreateAgent: () => void;
+  onCreateSkill: () => void;
   onRebuildTeam: () => void;
   onOpenAgent: (agentId: string, agentName: string) => void;
   onRunTask: (payload: {
@@ -72,6 +73,7 @@ export default function TeamPanel(props: TeamPanelProps) {
           <h3>My Team</h3>
           <div className="team-panel-inline-actions">
             <button type="button" onClick={props.onCreateAgent}>+ Agent</button>
+            <button type="button" onClick={props.onCreateSkill}>+ Skill</button>
             <button type="button" onClick={props.onRebuildTeam}>Rebuild</button>
           </div>
         </div>

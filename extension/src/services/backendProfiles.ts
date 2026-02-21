@@ -33,9 +33,9 @@ export const BACKEND_PROFILES: BackendCapabilityProfile[] = [
     },
     limitations: ["Higher API cost", "Limited provider-native integrations"],
     models: [
-      { id: "haiku-4.5", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.8, costPer1MOutput: 4.0 },
-      { id: "sonnet-4.5", tier: "standard", contextWindow: 200_000, costPer1MInput: 3.0, costPer1MOutput: 15.0 },
-      { id: "opus-4.5", tier: "advanced", contextWindow: 200_000, costPer1MInput: 15.0, costPer1MOutput: 75.0 }
+      { id: "claude-haiku-4-5-20251001", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.8, costPer1MOutput: 4.0 },
+      { id: "claude-sonnet-4-5-20250929", tier: "standard", contextWindow: 200_000, costPer1MInput: 3.0, costPer1MOutput: 15.0 },
+      { id: "claude-opus-4-5-20251101", tier: "advanced", contextWindow: 200_000, costPer1MInput: 15.0, costPer1MOutput: 75.0 }
     ],
     features: {
       stdinPrompt: true,
@@ -64,9 +64,17 @@ export const BACKEND_PROFILES: BackendCapabilityProfile[] = [
     },
     limitations: ["Cloud-run usage can incur extra costs", "Plugin ecosystem is limited"],
     models: [
-      { id: "o3-mini", tier: "fast", contextWindow: 200_000, costPer1MInput: 1.1, costPer1MOutput: 4.4 },
-      { id: "o3", tier: "standard", contextWindow: 200_000, costPer1MInput: 10.0, costPer1MOutput: 40.0 },
-      { id: "codex-1", tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 5.0, costPer1MOutput: 20.0 }
+      // GPT-5 Codex family (from /model CLI output — latest first)
+      { id: "gpt-5.3-codex", tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 5.0, costPer1MOutput: 20.0 },
+      { id: "gpt-5.3-codex-spark", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.5, costPer1MOutput: 2.0 },
+      { id: "gpt-5.2-codex", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.0, costPer1MOutput: 8.0 },
+      { id: "gpt-5.1-codex-max", tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 10.0, costPer1MOutput: 40.0 },
+      { id: "gpt-5.2", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.0, costPer1MOutput: 8.0 },
+      { id: "gpt-5.1-codex-mini", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.4, costPer1MOutput: 1.6 },
+      // Fallback GPT-4 era models
+      { id: "gpt-4.1", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.0, costPer1MOutput: 8.0 },
+      { id: "gpt-4o", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.5, costPer1MOutput: 10.0 },
+      { id: "o3", tier: "advanced", contextWindow: 200_000, costPer1MInput: 10.0, costPer1MOutput: 40.0 }
     ],
     features: {
       stdinPrompt: true,
@@ -95,8 +103,16 @@ export const BACKEND_PROFILES: BackendCapabilityProfile[] = [
     },
     limitations: ["Can be weaker at deep refactoring consistency"],
     models: [
-      { id: "gemini-2.5-flash", tier: "fast", contextWindow: 1_000_000, costPer1MInput: 0.15, costPer1MOutput: 0.6 },
-      { id: "gemini-2.5-pro", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 1.25, costPer1MOutput: 10.0 }
+      // Gemini 3 family (from /model CLI output — latest first)
+      { id: "gemini-3-pro", tier: "advanced", contextWindow: 2_000_000, costPer1MInput: 2.5, costPer1MOutput: 15.0 },
+      { id: "gemini-3-flash", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.3, costPer1MOutput: 1.2 },
+      // Gemini 2.5 family
+      { id: "gemini-2.5-pro", tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 1.25, costPer1MOutput: 10.0 },
+      { id: "gemini-2.5-flash", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.15, costPer1MOutput: 0.6 },
+      { id: "gemini-2.5-flash-lite", tier: "fast", contextWindow: 1_000_000, costPer1MInput: 0.075, costPer1MOutput: 0.3 },
+      // Gemini 2.0 family
+      { id: "gemini-2.0-flash", tier: "fast", contextWindow: 1_000_000, costPer1MInput: 0.1, costPer1MOutput: 0.4 },
+      { id: "gemini-2.0-flash-lite", tier: "fast", contextWindow: 1_000_000, costPer1MInput: 0.075, costPer1MOutput: 0.3 }
     ],
     features: {
       stdinPrompt: true,

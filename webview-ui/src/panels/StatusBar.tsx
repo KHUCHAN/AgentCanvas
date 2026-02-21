@@ -1,4 +1,4 @@
-import type { BackendUsageSummary } from "../messaging/protocol";
+import type { BackendUsageSummary, ClaudeQuotaSnapshot } from "../messaging/protocol";
 
 type StatusBarProps = {
   skills: number;
@@ -19,6 +19,7 @@ type StatusBarProps = {
   contextThreshold: number;
   contextState: "ok" | "warn" | "danger";
   backendUsageSummaries: BackendUsageSummary[];
+  claudeQuota?: ClaudeQuotaSnapshot;
   showBuildNew: boolean;
   onBuildNew: () => void;
 };
@@ -29,6 +30,8 @@ export default function StatusBar(props: StatusBarProps) {
     .sort((left, right) => backendOrder(left.backendId) - backendOrder(right.backendId))
     .map((summary) => `${shortBackendName(summary.backendId)} ${Math.round((1 - summary.availabilityScore) * 100)}%`)
     .join(" · ");
+
+  const quotaText = buildQuotaText(props.claudeQuota);
 
   return (
     <div className="status-bar">
@@ -46,6 +49,7 @@ export default function StatusBar(props: StatusBarProps) {
         Context {formatTokenCount(props.contextUsed)}/{formatTokenCount(props.contextThreshold)}
       </span>
       <span>Backends {usageText || "-"}</span>
+      {quotaText && <span className="quota-meter">{quotaText}</span>}
       <span>Flow {props.flowName}</span>
       <span>View {props.canvasView}</span>
       <span>Run {props.runId ?? "-"}</span>
@@ -56,6 +60,23 @@ export default function StatusBar(props: StatusBarProps) {
       )}
     </div>
   );
+}
+
+function buildQuotaText(quota: ClaudeQuotaSnapshot | undefined): string {
+  if (!quota) {
+    return "";
+  }
+  const parts: string[] = [];
+  if (quota.sessionUsedPct > 0) {
+    parts.push(`Session ${quota.sessionUsedPct}%`);
+  }
+  if (quota.weekAllUsedPct > 0) {
+    parts.push(`Week ${quota.weekAllUsedPct}%`);
+  }
+  if (parts.length === 0) {
+    return "";
+  }
+  return `Claude: ${parts.join(" · ")}`;
 }
 
 function formatTokenCount(value: number): string {

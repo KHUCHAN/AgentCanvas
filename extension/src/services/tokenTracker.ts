@@ -91,7 +91,7 @@ export class TokenTracker {
       outputTokens: 0,
       cost: 0,
       savedCost: 0,
-      model: "sonnet-4.5",
+      model: "claude-sonnet-4-5-20250929",
       callCount: 0
     };
   }
@@ -139,4 +139,3 @@ function roundUsd(value: number): number {
 function roundRate(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
-

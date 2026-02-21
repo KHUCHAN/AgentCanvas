@@ -21,8 +21,11 @@ async function run() {
     test('Agent profile service CRUD + assignment roundtrip', testAgentProfileRoundtrip),
     test('Agent profile updates keep delegation with stale cache input', testAgentProfileStaleCachePreservesDelegation),
     test('Agent runtime cwd defaults by role', testAgentRuntimeDefaults),
+    test('Agent profile runtime options persist for backend/model/policies', testAgentRuntimeOptionsRoundtrip),
     test('Interaction firewall validates communication and handoff scope', testInteractionValidationFirewall),
     test('CLI detector returns known backend entries', testCliDetectorShape),
+    test('CLI invocation builder maps Claude/Codex flags', testCliInvocationBuilder),
+    test('Backend profiles expose required latest models', testBackendProfilesModelCoverage),
     test('Flow store save/load/list roundtrip', testFlowStoreRoundtrip),
     test('Interaction log is appended to JSONL', testInteractionLogRoundtrip),
     test('Schedule service computes plan and patches updates', testScheduleServiceRoundtrip),
@@ -340,6 +343,150 @@ async function testAgentRuntimeDefaults() {
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+}
+
+async function testAgentRuntimeOptionsRoundtrip() {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-runtime-options-'));
+  try {
+    const {
+      createCustomAgentProfile,
+      applyAgentProfilePatch,
+      listCustomAgentProfiles
+    } = require(path.join(root, 'extension', 'dist', 'services', 'agentProfileService.js'));
+
+    const created = await createCustomAgentProfile({
+      workspaceRoot: tmpRoot,
+      homeDir: tmpRoot,
+      name: 'Runtime Options Agent',
+      role: 'coder',
+      backendId: 'codex',
+      modelId: 'gpt-4.1',
+      codexApproval: 'on-request',
+      codexSandbox: 'workspace-write',
+      additionalDirs: ['/tmp/shared'],
+      enableWebSearch: true,
+      sessionId: 'session-123'
+    });
+
+    const updated = await applyAgentProfilePatch({
+      workspaceRoot: tmpRoot,
+      baseProfile: created,
+      patch: {
+        runtime: {
+          kind: 'cli',
+          backendId: 'claude',
+          cwdMode: 'workspace',
+          modelId: 'claude-sonnet-4-5-20250929',
+          promptMode: 'append',
+          maxTurns: 6,
+          maxBudgetUsd: 3.5,
+          permissionMode: 'plan',
+          allowedTools: ['Read', 'Grep']
+        }
+      }
+    });
+
+    assert.equal(updated.runtime?.kind, 'cli');
+    assert.equal(updated.runtime?.backendId, 'claude');
+    assert.equal(updated.runtime?.modelId, 'claude-sonnet-4-5-20250929');
+    assert.equal(updated.runtime?.maxTurns, 6);
+    assert.equal(updated.runtime?.maxBudgetUsd, 3.5);
+    assert.equal(updated.runtime?.permissionMode, 'plan');
+    assert.deepEqual(updated.runtime?.allowedTools, ['Read', 'Grep']);
+
+    const listed = await listCustomAgentProfiles(tmpRoot);
+    assert.equal(listed.length, 1, 'expected one runtime-options profile');
+    assert.equal(listed[0].runtime?.kind, 'cli');
+    assert.equal(listed[0].runtime?.backendId, 'claude');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function testCliInvocationBuilder() {
+  const { buildCliInvocation } = require(path.join(root, 'extension', 'dist', 'services', 'cliExecutor.js'));
+
+  const claudeInvocation = buildCliInvocation({
+    backend: {
+      id: 'claude',
+      displayName: 'Claude',
+      command: 'claude',
+      args: [],
+      available: true,
+      stdinPrompt: true
+    },
+    prompt: 'hello',
+    modelId: 'claude-sonnet-4-5-20250929',
+    runtime: {
+      kind: 'cli',
+      backendId: 'claude',
+      promptMode: 'append',
+      maxTurns: 3,
+      maxBudgetUsd: 2.5,
+      permissionMode: 'plan',
+      allowedTools: ['Read']
+    },
+    systemPrompt: 'Always respond in English.'
+  });
+
+  assert.equal(claudeInvocation.command, 'claude');
+  assert.ok(claudeInvocation.args.includes('--output-format'));
+  assert.ok(claudeInvocation.args.includes('stream-json'));
+  assert.ok(claudeInvocation.args.includes('--max-turns'));
+  assert.ok(claudeInvocation.args.includes('--max-budget-usd'));
+  assert.ok(claudeInvocation.args.includes('--permission-mode'));
+  assert.ok(claudeInvocation.args.includes('plan'));
+  assert.ok(claudeInvocation.args.includes('--append-system-prompt'));
+
+  const codexInvocation = buildCliInvocation({
+    backend: {
+      id: 'codex',
+      displayName: 'Codex',
+      command: 'codex',
+      args: [],
+      available: true,
+      stdinPrompt: true
+    },
+    prompt: 'fix tests',
+    modelId: 'gpt-4.1',
+    runtime: {
+      kind: 'cli',
+      backendId: 'codex',
+      codexApproval: 'on-request',
+      codexSandbox: 'workspace-write',
+      additionalDirs: ['/tmp/a', '/tmp/b'],
+      enableWebSearch: true,
+      sessionId: 'sess-001'
+    }
+  });
+
+  assert.equal(codexInvocation.command, 'codex');
+  assert.equal(codexInvocation.args[0], 'exec');
+  assert.ok(codexInvocation.args.includes('--json'));
+  assert.ok(codexInvocation.args.includes('--ask-for-approval'));
+  assert.ok(codexInvocation.args.includes('on-request'));
+  assert.ok(codexInvocation.args.includes('--sandbox'));
+  assert.ok(codexInvocation.args.includes('workspace-write'));
+  assert.ok(codexInvocation.args.includes('--add-dir'));
+  assert.ok(codexInvocation.args.includes('--search'));
+}
+
+function testBackendProfilesModelCoverage() {
+  const { BACKEND_PROFILES } = require(path.join(root, 'extension', 'dist', 'services', 'backendProfiles.js'));
+  const byBackend = new Map(BACKEND_PROFILES.map((profile) => [profile.backendId, profile]));
+
+  const claudeModels = new Set((byBackend.get('claude')?.models || []).map((model) => model.id));
+  const codexModels = new Set((byBackend.get('codex')?.models || []).map((model) => model.id));
+  const geminiModels = new Set((byBackend.get('gemini')?.models || []).map((model) => model.id));
+
+  assert.ok(claudeModels.has('claude-sonnet-4-5-20250929'), 'claude sonnet model should exist');
+  assert.ok(claudeModels.has('claude-haiku-4-5-20251001'), 'claude haiku model should exist');
+  assert.ok(codexModels.has('gpt-4.1'), 'codex gpt-4.1 should exist');
+  assert.ok(codexModels.has('codex-1'), 'codex-1 should exist');
+  assert.ok(geminiModels.has('gemini-2.5-flash'), 'gemini 2.5 flash should exist');
+  assert.ok(geminiModels.has('gemini-2.5-pro'), 'gemini 2.5 pro should exist');
+  assert.ok(geminiModels.has('gemini-2.5-flash-lite'), 'gemini 2.5 flash-lite should exist');
+  assert.ok(geminiModels.has('gemini-2.0-flash-lite'), 'gemini 2.0 flash-lite should exist');
 }
 
 function testInteractionValidationFirewall() {

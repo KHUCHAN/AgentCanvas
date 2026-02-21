@@ -226,27 +226,36 @@ function ScheduleCanvas(props: ScheduleViewProps) {
 
   if (!props.runId) {
     return (
-      <div className="schedule-empty">
-        <div className="empty-title">No schedule run selected</div>
-        <div className="empty-subtitle">Start a run from the Run panel, then switch to Schedule.</div>
+      <div className="schedule-empty empty-state-enhanced">
+        <div className="empty-icon-wrapper">
+          <svg className="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+        </div>
+        <div className="empty-title">스케줄 된 태스크가 없습니다</div>
+        <div className="empty-subtitle">작업을 시작하려면 태스크를 생성하거나 플래너를 활성화하세요.</div>
       </div>
     );
   }
 
   if (props.tasks.length === 0) {
     return (
-      <div className="schedule-empty">
-        <div className="empty-title">No scheduled tasks yet</div>
-        <div className="empty-subtitle">This run is active. Tasks will appear as the planner creates them.</div>
+      <div className="schedule-empty empty-state-enhanced">
+        <div className="empty-icon-wrapper">
+          <svg className="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+        </div>
+        <div className="empty-title">대기 중인 일정이 없습니다</div>
+        <div className="empty-subtitle">플래너가 계획을 설정하는 중이거나, 작업이 아직 할당되지 않았습니다.</div>
       </div>
     );
   }
 
   if (!hasValidTimelineWindow) {
     return (
-      <div className="schedule-empty">
-        <div className="empty-title">Timeline unavailable</div>
-        <div className="empty-subtitle">Task timing is out of range. Adjust task timing or refresh the run.</div>
+      <div className="schedule-empty empty-state-enhanced">
+        <div className="empty-icon-wrapper">
+          <svg className="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+        </div>
+        <div className="empty-title">타임라인 렌더링 불가</div>
+        <div className="empty-subtitle">Task 타이밍 범위를 벗어났습니다. 새로고침을 진행해 보세요.</div>
       </div>
     );
   }
@@ -260,8 +269,10 @@ function ScheduleCanvas(props: ScheduleViewProps) {
         fitView
         minZoom={0.2}
         maxZoom={2.2}
-        zoomOnScroll
+        zoomOnScroll={false}
+        panOnScroll={true}
         panOnDrag
+        preventScrolling={false}
         onNodeClick={(_event, node) => {
           if (node.type === "scheduleTask") {
             props.onSelectTask(node.id);

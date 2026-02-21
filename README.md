@@ -108,6 +108,19 @@ Covers:
 
 ![AgentCanvas UI](docs/screenshots/agentcanvas-ui.png)
 
+## Known Issues & Pending Fixes (2026-02-20)
+
+> 상세 스펙은 각 문서 참조. 구현 상태는 코드 정적 분석으로 검증.
+
+| ID | 심각도 | 증상 | 관련 파일 | 스펙 |
+|----|--------|------|----------|------|
+| NEW-1 | 🔴 P0 | Chat 메시지 보내도 화면에 미표시 | `App.tsx:1717` | UI_REVISION_WORKORDER §TASK-9 |
+| NEW-2 | 🔴 P0 | Rebuild 후 기존 Agent 미삭제 | `AgentPreviewModal.tsx:37` | UI_REVISION_WORKORDER §TASK-8 |
+| NEW-3 | 🟠 P1 | Orchestrator Backend가 Chat에 미반영 | `App.tsx:136` | UI_REVISION_WORKORDER §TASK-11 |
+| NEW-4 | 🟠 P1 | Build Prompt Bar가 Zoom 버튼 가림 | `styles.css` | UI_REVISION_WORKORDER §TASK-16 |
+| NEW-5 | 🟡 P2 | 팀 Apply 후 노드 겹침/미정렬 | `GraphView.tsx` | UI_REVISION_WORKORDER §TASK-17 |
+| NEW-6 | 🟡 P2 | CLI 모델 목록 최신화 필요 | `backendProfiles.ts` | AGENT_TEAM_BUILD_SPEC §12.3 |
+
 ## Related Docs
 
 - `README.md`
@@ -115,3 +128,8 @@ Covers:
 - `AGENT_SYSTEM.md`
 - `PROMPT_TO_AGENTS.md`
 - `agent communication.md`
+- `BUG_FIX_SPEC.md` — 전체 버그/기능 분석 원본
+- `UI_REVISION_WORKORDER.md` — UI 수정 작업지시서 (1차 + 2차)
+- `CODE_REVIEW2.md` — 코드 리뷰 이슈 목록 (1차 23건 + 2차 9건)
+- `CHAT_WORKFLOW_SPEC.md` — Chat 시스템 설계
+- `AGENT_TEAM_BUILD_SPEC.md` — 팀 빌드 & 모델 스펙

@@ -24,12 +24,25 @@ import {
 } from "./services/agentProfileService";
 import { detectAllCliBackends, pickPromptBackend, testBackend } from "./services/cliDetector";
 import { executeCliPrompt } from "./services/cliExecutor";
+import { buildAgentHomeDir } from "./services/agentEnvService";
+import { runAndLogBackendProbes } from "./services/backendProbeService";
 import { assignBackends } from "./services/backendAssigner";
 import {
   BACKEND_PROFILES,
   listAvailableCanonicalBackends,
   normalizeBackendId
 } from "./services/backendProfiles";
+import {
+  fetchBackendModelCatalogs,
+  invalidateBackendModelCatalogCache
+} from "./services/backendModelPoller";
+import {
+  fetchClaudeQuotaSnapshot,
+  fetchCodexQuotaSnapshot,
+  fetchGeminiQuotaSnapshot,
+  invalidateAllQuotaCaches
+} from "./services/claudeQuotaPoller";
+import { selectBackendForTask } from "./services/backendAllocator";
 import { buildAnnounce } from "./services/announceService";
 import { appendCollabEvent, generateCollabReport, readCollabEvents } from "./services/collaborationLogger";
 import { BackendUsageTracker } from "./services/backendUsageTracker";
@@ -98,16 +111,19 @@ import type {
 import { hasRequestId } from "./messages/protocol";
 import type {
   AgentProfile,
+  BackendModelCatalog,
   BackendBudget,
   BackendUsageSummary,
   ChatMessage,
   CanonicalBackendId,
+  ClaudeQuotaSnapshot,
   CliBackend,
   CliBackendId,
   CliBackendOverrides,
   DiscoverySnapshot,
   GeneratedAgentStructure,
   InteractionEdgeData,
+  NonAutoBackendId,
   WorkPlan,
   Task,
   TaskEvent,
@@ -177,6 +193,8 @@ class AgentCanvasPanel {
   private demoRunTimers = new Map<string, NodeJS.Timeout>();
   private activeRunStops = new Map<string, () => void>();
   private activeRunFlowById = new Map<string, string>();
+  /** VS Code Output Channel that shows live backend probe results. Created on first use. */
+  private probeOutputChannel: vscode.OutputChannel | undefined;
 
   private constructor(panel: vscode.WebviewPanel, extensionContext: vscode.ExtensionContext) {
     this.panel = panel;
@@ -287,7 +305,12 @@ class AgentCanvasPanel {
     switch (message.type) {
       case "READY": {
         await this.refreshState(true);
-        await this.publishBackendUsageUpdate().catch(() => undefined);
+        const readyBackends = await this.detectCliBackends().catch(() => []);
+        if (readyBackends.length > 0) {
+          await this.publishBackendUsageUpdate(readyBackends).catch(() => undefined);
+          await this.publishBackendModelsUpdate(readyBackends).catch(() => undefined);
+          await this.publishBackendQuotaUpdate(readyBackends).catch(() => undefined);
+        }
         this.postMessage({
           type: "CHAT_HISTORY",
           payload: { messages: this.getChatHistory() }
@@ -498,7 +521,22 @@ class AgentCanvasPanel {
           roleLabel: message.payload.roleLabel,
           description: message.payload.description,
           systemPrompt: message.payload.systemPrompt,
-          isOrchestrator: message.payload.isOrchestrator
+          isOrchestrator: message.payload.isOrchestrator,
+          backendId: message.payload.backendId,
+          modelId: message.payload.modelId,
+          promptMode: message.payload.promptMode,
+          maxTurns: message.payload.maxTurns,
+          maxBudgetUsd: message.payload.maxBudgetUsd,
+          permissionMode: message.payload.permissionMode,
+          allowedTools: message.payload.allowedTools,
+          codexApproval: message.payload.codexApproval,
+          codexSandbox: message.payload.codexSandbox,
+          geminiApprovalMode: message.payload.geminiApprovalMode,
+          geminiUseSandbox: message.payload.geminiUseSandbox,
+          additionalDirs: message.payload.additionalDirs,
+          enableWebSearch: message.payload.enableWebSearch,
+          sessionId: message.payload.sessionId,
+          sessionName: message.payload.sessionName
         });
         await this.refreshState();
         return { agentId: profile.id };
@@ -515,6 +553,8 @@ class AgentCanvasPanel {
           payload: { backends }
         });
         await this.publishBackendUsageUpdate(backends);
+        await this.publishBackendModelsUpdate(backends).catch(() => undefined);
+        await this.publishBackendQuotaUpdate(backends).catch(() => undefined);
         return { backends };
       }
       case "TEST_BACKEND": {
@@ -528,8 +568,24 @@ class AgentCanvasPanel {
       }
       case "GENERATE_AGENT_STRUCTURE": {
         try {
-          const snapshot = await this.ensureSnapshot();
+          // ── Fresh backend probes on every Rebuild ──────────────────────────
+          // Invalidate stale caches so the probe populates fresh results.
+          invalidateBackendModelCatalogCache();
+          invalidateAllQuotaCaches();
+          if (!this.probeOutputChannel) {
+            this.probeOutputChannel = vscode.window.createOutputChannel("AgentCanvas: Backend Probes");
+          }
           const backends = await this.detectCliBackends();
+          // Run claude/codex/gemini × /model + /status in parallel (6 probes).
+          // Cap at 5 s so rebuild is never blocked by an unavailable CLI.
+          await Promise.race([
+            runAndLogBackendProbes(backends, this.getWorkspaceRoot(), this.probeOutputChannel),
+            new Promise<void>((resolve) => { setTimeout(resolve, 5_000); })
+          ]);
+          this.probeOutputChannel.show(/* preserveFocus */ true);
+          // ── End probe — caches are now populated with confirmed models ─────
+
+          const snapshot = await this.ensureSnapshot();
           const usageTracker = this.getBackendUsageTracker();
           const availableCanonical = listAvailableCanonicalBackends(backends);
           const usageSummaries = await usageTracker.getAllSummaries(availableCanonical);
@@ -537,18 +593,52 @@ class AgentCanvasPanel {
           const preferredBackends = (message.payload.preferredBackends ?? []).filter((backendId) =>
             availableCanonical.includes(backendId)
           );
-          const backend = pickPromptBackend(backends, message.payload.backendId ?? "auto", usageSummaries);
           const cacheConfig = await loadConfig(this.getWorkspaceRoot());
-          const modelId = resolveModel({
-            agent: undefined,
-            taskType: "generation",
-            config: cacheConfig
-          });
           const workIntent = analyzeWorkIntent({
             prompt: message.payload.prompt,
             existingAgents: snapshot.agents,
             availableBackends: backends,
             usageSummaries
+          });
+          let backend = pickPromptBackend(backends, message.payload.backendId ?? "auto", usageSummaries);
+          if ((message.payload.backendId ?? "auto") === "auto") {
+            const quota = await fetchClaudeQuotaSnapshot(backends).catch(() => undefined);
+            if (quota) {
+              const recommended = selectBackendForTask(
+                [
+                  {
+                    backendId: "claude",
+                    remainingPct: 100 - quota.sessionUsedPct,
+                    resetsAt: quota.sessionResetsAt
+                  },
+                  {
+                    backendId: "codex",
+                    remainingPct: 100
+                  },
+                  {
+                    backendId: "gemini",
+                    remainingPct: 100 - quota.weekAllUsedPct,
+                    resetsAt: quota.weekResetsAt
+                  }
+                ],
+                workIntent.estimatedComplexity
+              );
+              if (recommended) {
+                const quotaPreferred = backends.find(
+                  (candidate) =>
+                    candidate.available && normalizeBackendId(candidate.id) === recommended
+                );
+                if (quotaPreferred) {
+                  backend = quotaPreferred;
+                }
+              }
+            }
+          }
+          const modelId = resolveModel({
+            agent: undefined,
+            taskType: "generation",
+            config: cacheConfig,
+            backendFamily: normalizeBackendId(backend.id)
           });
 
           this.postGenerationProgress("building_prompt", `Building prompt for ${backend.displayName}`, 15);
@@ -569,7 +659,7 @@ class AgentCanvasPanel {
             prompt: fullPrompt,
             workspacePath: this.getWorkspaceRoot(),
             modelId,
-            timeoutMs: 120_000
+            timeoutMs: 300_000
           });
           if (!result.success) {
             throw new Error(result.error || "CLI request failed");
@@ -587,10 +677,11 @@ class AgentCanvasPanel {
             flowName: "team-build",
             agentId: "team-designer"
           });
+          const usageSummariesAfterBuild = await usageTracker.getAllSummaries(availableCanonical);
           const agents = assignBackends({
             agents: parsed.agents,
             workIntent,
-            usageSummaries,
+            usageSummaries: usageSummariesAfterBuild,
             profiles: BACKEND_PROFILES,
             availableBackends: availableCanonical,
             preferredBackends,
@@ -601,7 +692,7 @@ class AgentCanvasPanel {
             ...parsed,
             agents,
             workIntent,
-            backendUsageAtBuild: usageSummaries
+            backendUsageAtBuild: usageSummariesAfterBuild
           };
           const historyEntry = await appendPromptHistory({
             workspaceRoot: this.getWorkspaceRoot(),
@@ -640,6 +731,8 @@ class AgentCanvasPanel {
           await markPromptHistoryApplied(this.getWorkspaceRoot(), message.payload.historyId, true);
         }
         await this.refreshState();
+        const backends = await this.detectCliBackends();
+        await this.publishBackendUsageUpdate(backends).catch(() => undefined);
         this.postMessage({
           type: "PROMPT_HISTORY",
           payload: { items: await readPromptHistory(this.getWorkspaceRoot()) }
@@ -665,6 +758,8 @@ class AgentCanvasPanel {
         await this.applyGeneratedStructure(item.result, false, true);
         await markPromptHistoryApplied(this.getWorkspaceRoot(), item.id, true);
         await this.refreshState();
+        const backends = await this.detectCliBackends();
+        await this.publishBackendUsageUpdate(backends).catch(() => undefined);
         this.postMessage({
           type: "PROMPT_HISTORY",
           payload: { items: await readPromptHistory(this.getWorkspaceRoot()) }
@@ -697,7 +792,7 @@ class AgentCanvasPanel {
             model: message.payload.modelId
           }
         );
-        this.appendChatMessage(userMessage, true);
+        this.appendChatMessage(userMessage, false);
 
         const pendingPlan = this.pendingPlanByWorkspace.get(workspaceRoot);
         if (pendingPlan && isConfirmCommand(content)) {
@@ -727,6 +822,12 @@ class AgentCanvasPanel {
           content,
           mode: message.payload.mode,
           backendId: message.payload.backendId,
+          planner: async (plannerInput) =>
+            await this.generateWorkPlanWithLlm({
+              plannerPrompt: plannerInput.request,
+              backendId: plannerInput.backendId,
+              modelId: message.payload.modelId
+            }),
           context: {
             agents: snapshot.agents,
             activeRunId: runId,
@@ -1191,12 +1292,16 @@ class AgentCanvasPanel {
       }
       case "SET_BACKEND_OVERRIDES": {
         await this.setBackendOverrides(message.payload.overrides);
+        invalidateBackendModelCatalogCache();
+        invalidateAllQuotaCaches();
         const backends = await this.detectCliBackends();
         this.postMessage({
           type: "CLI_BACKENDS",
           payload: { backends }
         });
         await this.publishBackendUsageUpdate(backends);
+        await this.publishBackendModelsUpdate(backends).catch(() => undefined);
+        await this.publishBackendQuotaUpdate(backends).catch(() => undefined);
         return { backends };
       }
       case "GET_BACKEND_USAGE": {
@@ -1288,7 +1393,8 @@ class AgentCanvasPanel {
       `img-src ${webview.cspSource} https: data:`,
       `style-src ${webview.cspSource} 'unsafe-inline'`,
       `font-src ${webview.cspSource}`,
-      `script-src 'nonce-${nonce}' ${webview.cspSource}`
+      `script-src 'nonce-${nonce}' ${webview.cspSource}`,
+      `connect-src ${webview.cspSource} https:`
     ].join("; ");
 
     let html = assetReplaced.replace(/<head>/i, `<head>\n<meta http-equiv=\"Content-Security-Policy\" content=\"${csp}\">`);
@@ -2646,7 +2752,7 @@ class AgentCanvasPanel {
 
     const idlePollMs = 500;
     const stallTimeoutMs = 10_000;
-    const defaultTaskTimeoutMs = 120_000;
+    const defaultTaskTimeoutMs = 300_000;
     let stalledSinceMs: number | undefined;
     const interactionEdges = input.edges.filter((edge) => edge.type === "interaction");
     const taskTimeoutByNodeId = buildTaskTimeoutIndex({
@@ -2665,6 +2771,14 @@ class AgentCanvasPanel {
     }
 
     try {
+      /**
+       * Tracks the IDs of tasks whose async execution closure is currently
+       * in-flight. Used to prevent the allFinished guard from firing while
+       * post-processing work (proposal logging, memory extraction, etc.) is
+       * still running after a task has been marked "done" in the scheduler.
+       */
+      const inFlightTaskIds = new Set<string>();
+
       while (true) {
         if (stopped) {
           const current = this.scheduleService.getTasks(input.runId);
@@ -2693,7 +2807,9 @@ class AgentCanvasPanel {
           break;
         }
 
-        const allFinished = tasks.every((task) => isTerminalTaskStatus(task.status));
+        const allFinished =
+          tasks.every((task) => isTerminalTaskStatus(task.status)) &&
+          inFlightTaskIds.size === 0;
         if (allFinished) {
           if (tasks.some((task) => task.status === "blocked")) {
             failedMessage = failedMessage ?? "One or more tasks were blocked";
@@ -2701,14 +2817,18 @@ class AgentCanvasPanel {
           break;
         }
 
-        const nextTask = tasks.find((task) => {
+        const readyTasks = tasks.filter((task) => {
           if (!(task.status === "planned" || task.status === "ready")) {
+            return false;
+          }
+          // Skip tasks whose async closure is already in-flight
+          if (inFlightTaskIds.has(task.id)) {
             return false;
           }
           return task.deps.every((depId) => statusById.get(depId) === "done");
         });
 
-        if (!nextTask) {
+        if (readyTasks.length === 0) {
           const missingDependencyTasks = tasks.filter(
             (task) =>
               (task.status === "planned" || task.status === "ready") &&
@@ -2731,26 +2851,32 @@ class AgentCanvasPanel {
             break;
           }
 
-          const now = Date.now();
-          if (stalledSinceMs === undefined) {
-            stalledSinceMs = now;
-          } else if (now - stalledSinceMs >= stallTimeoutMs) {
-            const stalledTasks = tasks.filter(
-              (task) => task.status === "planned" || task.status === "ready" || task.status === "running"
-            );
-            for (const task of stalledTasks) {
-              this.scheduleService.patchTask(input.runId, task.id, {
-                status: "blocked",
-                blocker: {
-                  kind: "external",
-                  message: "Run stalled: unresolved dependencies or dependency cycle"
-                },
-                actualEndMs: Date.now()
-              });
+          // Stall detection: only fire when nothing is actively running in the background
+          if (inFlightTaskIds.size === 0) {
+            const now = Date.now();
+            if (stalledSinceMs === undefined) {
+              stalledSinceMs = now;
+            } else if (now - stalledSinceMs >= stallTimeoutMs) {
+              const stalledTasks = tasks.filter(
+                (task) => task.status === "planned" || task.status === "ready" || task.status === "running"
+              );
+              for (const task of stalledTasks) {
+                this.scheduleService.patchTask(input.runId, task.id, {
+                  status: "blocked",
+                  blocker: {
+                    kind: "external",
+                    message: "Run stalled: unresolved dependencies or dependency cycle"
+                  },
+                  actualEndMs: Date.now()
+                });
+              }
+              this.scheduleService.recompute(input.runId);
+              failedMessage = "Run stalled due to unresolved dependencies";
+              break;
             }
-            this.scheduleService.recompute(input.runId);
-            failedMessage = "Run stalled due to unresolved dependencies";
-            break;
+          } else {
+            // In-flight tasks are making progress — reset stall timer
+            stalledSinceMs = undefined;
           }
           await sleep(idlePollMs);
           continue;
@@ -2758,6 +2884,10 @@ class AgentCanvasPanel {
 
         stalledSinceMs = undefined;
 
+        for (const nextTask of readyTasks) {
+          inFlightTaskIds.add(nextTask.id);
+          void (async () => {
+            try {
         this.scheduleService.patchTask(input.runId, nextTask.id, {
           status: "running",
           actualStartMs: Date.now(),
@@ -2869,7 +2999,7 @@ class AgentCanvasPanel {
             }
           });
           this.scheduleService.recompute(input.runId);
-          continue;
+          return; // early-return inside fire-and-forget IIFE (was: continue outer loop)
         }
 
         const node = nodeById.get(String(nextTask.meta?.nodeId ?? ""));
@@ -2920,16 +3050,25 @@ class AgentCanvasPanel {
           proposalAgentId = taskAgent.id;
         }
 
-        const modelId = resolveModel({
-          agent: taskAgent,
-          taskType: "execution",
-          config: cacheConfig
-        });
+        const taskAssignedBackend =
+          typeof nextTask.meta?.assignedBackend === "string"
+            ? (nextTask.meta.assignedBackend as CliBackendId)
+            : undefined;
         const backend = await this.resolveBackendForTask(
-          runtimeResolution.backendId ?? input.requestedBackendId,
+          runtimeResolution.backendId ?? taskAssignedBackend ?? input.requestedBackendId,
           node,
           runtimeResolution
         );
+        const taskAssignedModel =
+          typeof nextTask.meta?.assignedModel === "string"
+            ? nextTask.meta.assignedModel.trim()
+            : "";
+        const modelId = taskAssignedModel || resolveModel({
+          agent: taskAgent,
+          taskType: "execution",
+          config: cacheConfig,
+          backendFamily: normalizeBackendId(backend.id)
+        });
         const runInstruction = input.instruction?.trim();
         const memoryInstruction =
           runInstruction && runInstruction.length > 0
@@ -2986,11 +3125,66 @@ class AgentCanvasPanel {
           runInstruction,
           input.taskOptions
         );
+        const runtimeOptions =
+          taskAgent?.runtime?.kind === "cli"
+            ? taskAgent.runtime
+            : undefined;
+
+        // Build per-agent isolated HOME (MCP + skills) — resilient, never throws
+        const agentBackendFamily = normalizeBackendId(backend.id);
+        let agentHomeDir: string | undefined;
+        if (taskAgent && agentBackendFamily) {
+          const agentSkillIds = new Set(taskAgent.assignedSkillIds ?? []);
+          const agentMcpIds = new Set(taskAgent.assignedMcpServerIds ?? []);
+          const agentSkills = (this.snapshot?.skills ?? []).filter((s) => agentSkillIds.has(s.id));
+          const agentMcpServers = (this.snapshot?.mcpServers ?? []).filter((s) => agentMcpIds.has(s.id));
+          if (agentSkills.length > 0 || agentMcpServers.length > 0) {
+            agentHomeDir = await buildAgentHomeDir({
+              agentId: taskAgent.id,
+              runId: input.runId,
+              workspacePath: this.getWorkspaceRoot(),
+              backendFamily: agentBackendFamily,
+              assignedMcpServers: agentMcpServers,
+              assignedSkills: agentSkills
+            }).catch(() => undefined);
+          }
+        }
+
+        let streamMessageId: string | undefined;
         const result = await executeCliPrompt({
           backend,
           prompt,
           workspacePath: executionCwd,
           modelId,
+          runtime: runtimeOptions,
+          systemPrompt: taskAgent?.systemPrompt,
+          agentHomeDir,
+          onStreamEvent: (event) => {
+            if (event.eventType !== "text" || !event.chunk) {
+              return;
+            }
+            if (!streamMessageId) {
+              const streamMessage = createChatMessage(
+                "orchestrator",
+                [{ kind: "text", text: "" }],
+                {
+                  runId: input.runId,
+                  taskIds: [nextTask.id],
+                  backendId: String(backend.id),
+                  model: modelId
+                }
+              );
+              streamMessageId = streamMessage.id;
+              this.appendChatMessage(streamMessage, true);
+            }
+            this.postMessage({
+              type: "CHAT_STREAM_CHUNK",
+              payload: {
+                messageId: streamMessageId,
+                chunk: event.chunk
+              }
+            });
+          },
           timeoutMs:
             taskTimeoutByNodeId.get(String(nextTask.meta?.nodeId ?? "")) ??
             defaultTaskTimeoutMs
@@ -3492,9 +3686,14 @@ class AgentCanvasPanel {
         }
 
         this.scheduleService.recompute(input.runId);
-        if (failedMessage) {
-          break;
-        }
+    } finally {
+      inFlightTaskIds.delete(nextTask.id);
+    }
+          })(); // end fire-and-forget IIFE
+        } // end for readyTasks
+
+        // Yield to the event loop so in-flight IIFEs can make progress
+        await sleep(idlePollMs);
       }
 
       const status = stopped ? "stopped" : failedMessage ? "failed" : "success";
@@ -3606,6 +3805,63 @@ class AgentCanvasPanel {
         .filter((depTaskId): depTaskId is string => Boolean(depTaskId));
     }
     return tasks;
+  }
+
+  private buildTasksFromWorkPlan(
+    runId: string,
+    items: WorkPlan["items"],
+    nodes: DiscoverySnapshot["nodes"]
+  ): Task[] {
+    const executableNodes = nodes.filter((node) => node.type === "agent" || node.type === "system");
+    const fallbackNode =
+      executableNodes.find((node) => node.type === "agent" && this.snapshot?.agents.some(
+        (agent) => agent.id === node.id && agent.isOrchestrator
+      )) ??
+      executableNodes.find((node) => node.type === "agent") ??
+      executableNodes[0];
+    const now = Date.now();
+    const tasks: Task[] = [];
+
+    for (const [index, item] of items.entries()) {
+      const assignedNode =
+        executableNodes.find((node) => node.type === "agent" && node.id === item.assignedAgentId) ??
+        fallbackNode;
+      const nodeId = assignedNode?.id ?? item.assignedAgentId;
+      const nodeType: "agent" | "system" = assignedNode?.type === "system" ? "system" : "agent";
+      const taskId = `task:${runId}:plan:${item.index}`;
+      const deps = [...new Set(
+        item.deps
+          .map((depIndex) => Math.round(depIndex))
+          .filter((depIndex) => depIndex > 0 && depIndex < item.index)
+          .map((depIndex) => `task:${runId}:plan:${depIndex}`)
+      )];
+      tasks.push({
+        id: taskId,
+        title: item.title,
+        agentId: nodeType === "agent" ? nodeId : `system:${nodeId}`,
+        deps,
+        status: "planned",
+        progress: 0,
+        estimateMs: 90_000 + (index % 2) * 45_000,
+        createdAtMs: now + index,
+        updatedAtMs: now + index,
+        meta: {
+          nodeId,
+          nodeType,
+          planId: runId,
+          planIndex: item.index,
+          planDescription: item.description,
+          assignedBackend: item.assignedBackend,
+          assignedModel: item.assignedModel,
+          priority: item.priority
+        }
+      });
+    }
+
+    if (tasks.length > 0) {
+      return tasks;
+    }
+    return this.buildTasksFromFlow(runId, nodes, []);
   }
 
   private applyTaskSubmissionOptions(
@@ -3741,6 +3997,12 @@ class AgentCanvasPanel {
         output: outputs.get(depId)
       }))
       .filter((item) => item.output !== undefined);
+    const planDescription = typeof task.meta?.planDescription === "string"
+      ? task.meta.planDescription.trim()
+      : "";
+    const planBackendHint = typeof task.meta?.assignedBackend === "string"
+      ? task.meta.assignedBackend.trim()
+      : "";
     const workInstructionLine = runInstruction?.trim()
       ? `User work request: ${runInstruction.trim()}`
       : undefined;
@@ -3755,6 +4017,8 @@ class AgentCanvasPanel {
         "## Manual Prompt Override",
         promptOverride.trim(),
         ...(workInstructionLine ? ["", "## Work request", workInstructionLine] : []),
+        ...(planDescription ? ["Task detail:", planDescription] : []),
+        ...(planBackendHint ? [`Preferred backend: ${planBackendHint}`] : []),
         ...(workOptionsLine ? [workOptionsLine] : []),
         "",
         "## Communication firewall",
@@ -3778,6 +4042,8 @@ class AgentCanvasPanel {
         `Node: ${name}`,
         `Role: ${role}`,
         `Task: ${task.title}`,
+        ...(planDescription ? [`Task detail: ${planDescription}`] : []),
+        ...(planBackendHint ? [`Preferred backend: ${planBackendHint}`] : []),
         ...(workInstructionLine ? [workInstructionLine] : []),
         ...(workOptionsLine ? [workOptionsLine] : []),
         communicationGuidance
@@ -3856,6 +4122,63 @@ class AgentCanvasPanel {
         edges: snapshot.edges
       };
     }
+  }
+
+  private async generateWorkPlanWithLlm(input: {
+    plannerPrompt: string;
+    backendId: NonAutoBackendId;
+    modelId?: string;
+  }): Promise<string | undefined> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const backends = await this.detectCliBackends();
+    const usageSummaries = await this.getBackendUsageTracker().getAllSummaries(
+      listAvailableCanonicalBackends(backends)
+    );
+    const backend = pickPromptBackend(backends, input.backendId, usageSummaries);
+    const config = await loadConfig(workspaceRoot);
+    const resolvedModel =
+      input.modelId?.trim() ||
+      resolveModel({
+        agent: undefined,
+        taskType: "generation",
+        config,
+        backendFamily: normalizeBackendId(backend.id)
+      });
+    const result = await executeCliPrompt({
+      backend,
+      prompt: input.plannerPrompt,
+      workspacePath: workspaceRoot,
+      modelId: resolvedModel,
+      timeoutMs: 180_000
+    });
+
+    const usageCost = calculateUsageCost(result.usage, resolvedModel);
+    const usage = result.usage
+      ? {
+        ...result.usage,
+        ...usageCost,
+        model: result.usage.model ?? usageCost.model
+      }
+      : undefined;
+    const usageBackendId = normalizeBackendId(backend.id);
+    if (usageBackendId) {
+      await this.getBackendUsageTracker().recordCall({
+        backendId: usageBackendId,
+        usage,
+        latencyMs: result.durationMs,
+        success: result.success,
+        modelHint: resolvedModel,
+        flowName: "work-plan",
+        agentId: this.snapshot?.agents.find((agent) => agent.isOrchestrator)?.id
+      });
+      await this.publishBackendUsageUpdate().catch(() => undefined);
+    }
+
+    if (!result.success) {
+      return undefined;
+    }
+    const output = result.output.trim();
+    return output.length > 0 ? output : undefined;
   }
 
   private async resolveBackendForTask(
@@ -3983,17 +4306,34 @@ class AgentCanvasPanel {
       payload: { plan: confirmed }
     });
 
-    const instructionLines = confirmed.items.map((item) =>
-      `${item.index}. ${item.title} [${item.priority}] -> ${item.assignedAgentName} (${item.assignedBackend})`
-    );
+    const flow = await this.tryLoadFlowDefinition("default");
     const backendId = confirmed.items[0]?.assignedBackend ?? "auto";
-    const run = await this.runFlow({
-      flowName: "default",
+    const run = await startRun({
+      workspaceRoot,
+      flowName: flow.flowName,
       backendId,
-      instruction: `Execute this work plan:\n${instructionLines.join("\n")}`,
       runName: confirmed.id,
-      tags: ["chat", "work-plan"],
+      tags: ["chat", "work-plan"]
+    });
+
+    const tasks = this.buildTasksFromWorkPlan(run.runId, confirmed.items, flow.nodes);
+    this.scheduleService.createRun(run.runId, tasks);
+    this.activeRunFlowById.set(run.runId, flow.flowName);
+
+    const instructionLines = confirmed.items.map((item) =>
+      `${item.index}. ${item.title} (${item.assignedAgentName})`
+    );
+    void this.executeRunLoop({
+      runId: run.runId,
+      flowName: flow.flowName,
+      nodes: flow.nodes,
+      edges: flow.edges,
+      instruction: `Execute confirmed work plan "${confirmed.id}".\n${instructionLines.join("\n")}`,
+      requestedBackendId: backendId,
       usePinnedOutputs: false
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.toast("error", `Run failed: ${detail}`);
     });
 
     const executing = this.workPlanService.setStatus(workspaceRoot, planId, "executing");
@@ -4010,11 +4350,11 @@ class AgentCanvasPanel {
     ], { runId: run.runId });
     this.appendChatMessage(startMessage, true);
 
-    const taskIds = this.scheduleService.getTasks(run.runId).map((task) => task.id);
+    const taskIds = tasks.map((task) => task.id);
     return {
       plan: executing,
       runId: run.runId,
-      flowName: run.flowName,
+      flowName: flow.flowName,
       taskIds
     };
   }
@@ -4100,6 +4440,30 @@ class AgentCanvasPanel {
     return summaries;
   }
 
+  private async publishBackendModelsUpdate(backends?: CliBackend[]): Promise<BackendModelCatalog[]> {
+    const resolvedBackends = backends ?? (await this.detectCliBackends());
+    const catalogs = await fetchBackendModelCatalogs(resolvedBackends);
+    this.postMessage({
+      type: "BACKEND_MODELS_UPDATE",
+      payload: { catalogs }
+    });
+    return catalogs;
+  }
+
+  private async publishBackendQuotaUpdate(backends?: CliBackend[]): Promise<ClaudeQuotaSnapshot | undefined> {
+    const resolvedBackends = backends ?? (await this.detectCliBackends());
+    const [claude, codex, gemini] = await Promise.all([
+      fetchClaudeQuotaSnapshot(resolvedBackends),
+      fetchCodexQuotaSnapshot(resolvedBackends),
+      fetchGeminiQuotaSnapshot(resolvedBackends)
+    ]);
+    this.postMessage({
+      type: "BACKEND_QUOTA_UPDATE",
+      payload: { claude, codex, gemini }
+    });
+    return claude;
+  }
+
   private postGenerationProgress(
     stage: "building_prompt" | "calling_cli" | "parsing_output" | "done" | "error",
     message: string,
@@ -4121,10 +4485,49 @@ class AgentCanvasPanel {
     const homeDir = snapshot.agent.homeDir ?? getHomeDir();
 
     const currentAgents = snapshot.agents;
+    const generatedNameKeys = new Set(structure.agents.map((agent) => normalizeLabel(agent.name)));
+    const staleAgentIds = new Set<string>();
+    const staleAgents =
+      overwriteExisting
+        ? currentAgents.filter(
+          (agent) =>
+            agent.id.startsWith("custom:") &&
+            !generatedNameKeys.has(normalizeLabel(agent.name))
+        )
+        : [];
+    if (staleAgents.length > 0) {
+      this.postGenerationProgress(
+        "building_prompt",
+        `Removing ${staleAgents.length} stale agent(s) from previous rebuild...`,
+        6
+      );
+      for (const staleAgent of staleAgents) {
+        try {
+          await deleteAgentProfile(workspaceRoot, staleAgent.id);
+          staleAgentIds.add(staleAgent.id);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          this.toast("warning", `Failed to delete stale agent "${staleAgent.name}": ${detail}`);
+        }
+      }
+
+      if (staleAgentIds.size > 0) {
+        await this.ensureAgentLinksLoaded();
+        const previousLinkCount = this.agentLinks.length;
+        this.agentLinks = this.agentLinks.filter(
+          (edge) => !staleAgentIds.has(edge.source) && !staleAgentIds.has(edge.target)
+        );
+        if (this.agentLinks.length !== previousLinkCount) {
+          await this.persistAgentLinks();
+        }
+      }
+    }
+
+    const retainedAgents = currentAgents.filter((agent) => !staleAgentIds.has(agent.id));
     const normalizedNameToAgent = new Map(
-      currentAgents.map((agent) => [normalizeLabel(agent.name), agent] as const)
+      retainedAgents.map((agent) => [normalizeLabel(agent.name), agent] as const)
     );
-    const usedNames = new Set(currentAgents.map((agent) => normalizeLabel(agent.name)));
+    const usedNames = new Set(retainedAgents.map((agent) => normalizeLabel(agent.name)));
     const createdBySourceName = new Map<string, AgentProfile>();
 
     const availableSkillIds = new Set(snapshot.skills.map((skill) => skill.id));
@@ -4367,7 +4770,84 @@ class AgentCanvasPanel {
       }
     }
 
+    this.postGenerationProgress("building_prompt", "Exporting AGENTS.md / CLAUDE.md...", 96);
+    await this.exportCliTeamDocs({
+      workspaceRoot,
+      structure,
+      agents: [...createdBySourceName.values()]
+    }).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.toast("warning", `Failed to export CLI team docs: ${detail}`);
+    });
+
     this.postGenerationProgress("done", `Applied ${createdBySourceName.size} agent(s) successfully`, 100);
+  }
+
+  private async exportCliTeamDocs(input: {
+    workspaceRoot: string;
+    structure: GeneratedAgentStructure;
+    agents: AgentProfile[];
+  }): Promise<void> {
+    const uniqueAgents = dedupeAgents(input.agents);
+    const claudeAgents = uniqueAgents.filter((agent) => isCanonicalBackend(agent, "claude"));
+    const codexAgents = uniqueAgents.filter((agent) => isCanonicalBackend(agent, "codex"));
+    if (claudeAgents.length === 0 && codexAgents.length === 0) {
+      return;
+    }
+
+    if (claudeAgents.length > 0) {
+      const claudeLines: string[] = [
+        `# AgentCanvas Team: ${input.structure.teamName || "Generated Team"}`,
+        "",
+        input.structure.teamDescription || "Generated by AgentCanvas.",
+        "",
+        "## Claude Agents",
+        ...claudeAgents.map((agent) => {
+          const role = agent.roleLabel || agent.role;
+          const model =
+            agent.runtime?.kind === "cli"
+              ? agent.runtime.modelId || agent.preferredModel || "default"
+              : agent.preferredModel || "default";
+          return `- **${agent.name}** (${role}) · model: ${model}`;
+        }),
+        "",
+        "## Team Rules",
+        "- Orchestrator plans and delegates work.",
+        "- Worker agents submit clear summaries and changed-file lists.",
+        "- Keep outputs concise and implementation-focused."
+      ];
+      if (codexAgents.length > 0) {
+        claudeLines.push("", "See also `AGENTS.md` for Codex-specific runtime policies.");
+      }
+      await writeFile(join(input.workspaceRoot, "CLAUDE.md"), `${claudeLines.join("\n")}\n`, "utf8");
+    }
+
+    if (codexAgents.length > 0) {
+      const codexLines: string[] = [
+        `# AgentCanvas Team: ${input.structure.teamName || "Generated Team"}`,
+        "",
+        input.structure.teamDescription || "Generated by AgentCanvas.",
+        "",
+        "## Codex Agents",
+        ...codexAgents.map((agent) => {
+          const role = agent.roleLabel || agent.role;
+          const runtime = agent.runtime?.kind === "cli" ? agent.runtime : undefined;
+          const model = runtime?.modelId || agent.preferredModel || "default";
+          const approval = runtime?.codexApproval || "on-request";
+          const sandbox = runtime?.codexSandbox || "workspace-write";
+          return `- **${agent.name}** (${role}) · model: ${model} · approval: ${approval} · sandbox: ${sandbox}`;
+        }),
+        "",
+        "## Execution Notes",
+        "- Prefer `workspace-write` sandbox for normal coding tasks.",
+        "- Use `read-only` for analysis-only workers.",
+        "- Keep session IDs per agent when resuming long-running threads."
+      ];
+      if (claudeAgents.length > 0) {
+        codexLines.push("", "See also `CLAUDE.md` for Claude-specific conventions.");
+      }
+      await writeFile(join(input.workspaceRoot, "AGENTS.md"), `${codexLines.join("\n")}\n`, "utf8");
+    }
   }
 
   private async buildDevServerHtml(devServerUrl: string): Promise<string | undefined> {
@@ -4393,7 +4873,7 @@ class AgentCanvasPanel {
         `style-src ${this.panel.webview.cspSource} 'unsafe-inline' ${normalized}`,
         `font-src ${this.panel.webview.cspSource} ${normalized}`,
         `script-src 'nonce-${nonce}' ${this.panel.webview.cspSource} ${normalized} 'unsafe-eval'`,
-        `connect-src ${normalized} ws://localhost:* ws://127.0.0.1:*`
+        `connect-src ${this.panel.webview.cspSource} ${normalized} ws://localhost:* ws://127.0.0.1:*`
       ].join("; ");
 
       const rewrittenAssets = withNonce.replace(
@@ -4522,6 +5002,21 @@ function resolveMcpServerId(
   const normalized = normalizeLabel(requested);
   const byName = servers.find((server) => normalizeLabel(server.name) === normalized);
   return byName?.id;
+}
+
+function dedupeAgents(agents: AgentProfile[]): AgentProfile[] {
+  const byId = new Map<string, AgentProfile>();
+  for (const agent of agents) {
+    byId.set(agent.id, agent);
+  }
+  return [...byId.values()];
+}
+
+function isCanonicalBackend(agent: AgentProfile, backend: CanonicalBackendId): boolean {
+  if (!agent.runtime || agent.runtime.kind !== "cli") {
+    return false;
+  }
+  return normalizeBackendId(agent.runtime.backendId) === backend;
 }
 
 function sanitizeRunNodeId(nodeId: string): string {

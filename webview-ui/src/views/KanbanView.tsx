@@ -66,9 +66,12 @@ export default function KanbanView(props: KanbanViewProps) {
 
   if (!props.runId) {
     return (
-      <div className="kanban-empty">
-        <div className="empty-title">No tasks yet</div>
-        <div className="empty-subtitle">Use the Chat panel to ask the orchestrator for work.</div>
+      <div className="kanban-empty empty-state-enhanced">
+        <div className="empty-icon-wrapper">
+          <svg className="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line></svg>
+        </div>
+        <div className="empty-title">진행 중인 태스크가 없습니다</div>
+        <div className="empty-subtitle">우측 패널의 AI Prompt를 통해 오케스트레이터에게 작업을 지시하거나, Task Panel에서 새 태스크를 생성하세요.</div>
       </div>
     );
   }

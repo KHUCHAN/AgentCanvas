@@ -17,9 +17,9 @@ export const DEFAULT_CACHE_CONFIG: CacheConfig = {
     logPath: ".agentcanvas/logs/cache-trace.jsonl"
   },
   modelRouting: {
-    heartbeat: "haiku-4.5",
-    cron: "haiku-4.5",
-    default: "sonnet-4.5"
+    heartbeat: "claude-haiku-4-5-20251001",
+    cron: "claude-haiku-4-5-20251001",
+    default: "claude-sonnet-4-5-20250929"
   },
   contextThreshold: 180_000
 };
@@ -128,5 +128,39 @@ function normalizeModel(value: unknown, fallback: string): string {
     return fallback;
   }
   const trimmed = value.trim();
-  return trimmed || fallback;
+  if (!trimmed) {
+    return fallback;
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower === "sonnet" || lower === "sonnet-4.5") {
+    return "claude-sonnet-4-5-20250929";
+  }
+  if (lower === "haiku" || lower === "haiku-4.5") {
+    return "claude-haiku-4-5-20251001";
+  }
+  if (lower === "opus" || lower === "opus-4.5") {
+    return "claude-opus-4-5-20251101";
+  }
+  if (lower === "gpt-4.1-latest") {
+    return "gpt-4.1";
+  }
+  if (lower === "gpt-4o-latest") {
+    return "gpt-4o";
+  }
+  if (lower === "codex-latest") {
+    return "codex-1";
+  }
+  if (lower === "gemini-flash" || lower === "gemini-2.5-flash-latest") {
+    return "gemini-2.5-flash";
+  }
+  if (lower === "gemini-flash-lite" || lower === "gemini-2.5-flash-lite-latest") {
+    return "gemini-2.5-flash-lite";
+  }
+  if (lower === "gemini-pro" || lower === "gemini-2.5-pro-latest") {
+    return "gemini-2.5-pro";
+  }
+  if (lower === "gemini-2.0-flash-lite-latest") {
+    return "gemini-2.0-flash-lite";
+  }
+  return trimmed;
 }

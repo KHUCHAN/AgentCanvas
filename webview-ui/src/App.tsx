@@ -13,6 +13,7 @@ import type {
   AgentRuntime,
   AgentRole,
   BackendBudget,
+  BackendModelCatalog,
   BackendUsageSummary,
   CacheConfig,
   CacheMetrics,
@@ -21,9 +22,15 @@ import type {
   ChatMode,
   CliBackend,
   CliBackendOverrides,
+  ClaudePermissionMode,
+  ClaudeQuotaSnapshot,
+  CliSubscriptionQuota,
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
   DiscoverySnapshot,
   ExtensionToWebviewMessage,
   GeneratedAgentStructure,
+  GeminiApprovalMode,
   InteractionEdgeData,
   MemoryCommit,
   MemoryItem,
@@ -88,9 +95,9 @@ const DEFAULT_CACHE_CONFIG: CacheConfig = {
     logPath: ".agentcanvas/logs/cache-trace.jsonl"
   },
   modelRouting: {
-    heartbeat: "haiku-4.5",
-    cron: "haiku-4.5",
-    default: "sonnet-4.5"
+    heartbeat: "claude-haiku-4-5-20251001",
+    cron: "claude-haiku-4-5-20251001",
+    default: "claude-sonnet-4-5-20250929"
   },
   contextThreshold: 180000
 };
@@ -102,7 +109,7 @@ const EMPTY_CACHE_METRICS: CacheMetrics = {
   outputTokens: 0,
   cost: 0,
   savedCost: 0,
-  model: "sonnet-4.5",
+  model: "claude-sonnet-4-5-20250929",
   hitRate: 0
 };
 
@@ -122,6 +129,7 @@ export default function App() {
   const [importPreview, setImportPreview] = useState<SkillPackPreview>();
   const [commonRuleModalOpen, setCommonRuleModalOpen] = useState(false);
   const [skillWizardOpen, setSkillWizardOpen] = useState(false);
+  const [autoLayoutSignal, setAutoLayoutSignal] = useState(0);
   const [saveSignal, setSaveSignal] = useState(0);
   const [busy, setBusy] = useState(false);
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false);
@@ -131,6 +139,10 @@ export default function App() {
     agentName: string;
   } | null>(null);
   const [promptBackends, setPromptBackends] = useState<CliBackend[]>([]);
+  const [backendModelCatalogs, setBackendModelCatalogs] = useState<BackendModelCatalog[]>([]);
+  const [claudeQuota, setClaudeQuota] = useState<ClaudeQuotaSnapshot>();
+  const [codexQuota, setCodexQuota] = useState<CliSubscriptionQuota>();
+  const [geminiQuota, setGeminiQuota] = useState<CliSubscriptionQuota>();
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatMode, setChatMode] = useState<ChatMode>("planning");
   const [chatBackendId, setChatBackendId] = useState<Exclude<CliBackend["id"], "auto">>("claude");
@@ -187,6 +199,7 @@ export default function App() {
   const scheduleRunIdRef = useRef<string>();
   const scheduleRunStateRef = useRef<Map<string, ScheduleRunState>>(new Map());
   const lastContextCardKeyRef = useRef<string>();
+  const orchestratorBackendSyncKeyRef = useRef<string>("");
 
   useEffect(() => {
     scheduleRunIdRef.current = scheduleRunId;
@@ -262,6 +275,10 @@ export default function App() {
         setSelectedEdge,
         setImportPreview,
         setPromptBackends,
+        setBackendModelCatalogs,
+        setClaudeQuota,
+        setCodexQuota,
+        setGeminiQuota,
         setBackendUsageSummaries,
         setPromptHistory,
         setGenerationProgress,
@@ -493,7 +510,6 @@ export default function App() {
         ])
       );
     }
-    setPanelMode("chat");
     setPanelOpen(true);
   }, [appendLocalChatMessage, selectedEdge, selectedNode]);
 
@@ -668,7 +684,6 @@ export default function App() {
 
     if (selectedNode?.id === nodeId) {
       setSelectedNode(undefined);
-      setPanelMode("library");
     }
   };
 
@@ -792,6 +807,13 @@ export default function App() {
     });
   };
 
+  const saveNodePositions = (positions: Array<{ nodeId: string; position: Position }>) => {
+    postToExtension({
+      type: "SAVE_NODE_POSITIONS",
+      payload: { positions }
+    });
+  };
+
   const addAgentLink = (sourceAgentId: string, targetAgentId: string) => {
     postToExtension({
       type: "ADD_AGENT_LINK",
@@ -864,6 +886,21 @@ export default function App() {
     description?: string;
     systemPrompt?: string;
     isOrchestrator: boolean;
+    backendId: CanonicalBackendId;
+    modelId?: string;
+    promptMode?: "append" | "replace";
+    maxTurns?: number;
+    maxBudgetUsd?: number;
+    permissionMode?: ClaudePermissionMode;
+    allowedTools?: string[];
+    codexApproval?: CodexApprovalPolicy;
+    codexSandbox?: CodexSandboxPolicy;
+    geminiApprovalMode?: GeminiApprovalMode;
+    geminiUseSandbox?: boolean;
+    additionalDirs?: string[];
+    enableWebSearch?: boolean;
+    sessionId?: string;
+    sessionName?: string;
   }) => {
     setBusy(true);
     try {
@@ -981,10 +1018,30 @@ export default function App() {
     }
   };
 
+  const latestPromptFromHistory = useMemo(
+    () => promptHistory.find((entry) => entry.prompt.trim().length > 0)?.prompt.trim() ?? "",
+    [promptHistory]
+  );
+  const defaultRebuildPrompt = useMemo(
+    () =>
+      "Rebuild the existing team based on current agents, skills, and MCP servers. Improve role assignments and update system prompts for this workspace.",
+    []
+  );
+  const canBuildTeamFromPrompt =
+    hasTeamReady ||
+    buildPromptText.trim().length > 0 ||
+    latestPromptFromHistory.length > 0;
+
   const buildTeamFromPromptBar = async () => {
-    const prompt = buildPromptText.trim();
+    const prompt =
+      buildPromptText.trim() ||
+      latestPromptFromHistory ||
+      (hasTeamReady ? defaultRebuildPrompt : "");
     if (!prompt || busy) {
       return;
+    }
+    if (!buildPromptText.trim()) {
+      setBuildPromptText(prompt);
     }
     await generateAgentStructure({
       prompt,
@@ -1022,6 +1079,7 @@ export default function App() {
       });
       setGeneratedPreview(undefined);
       setForceBuildPrompt(false);
+      setAutoLayoutSignal((current) => current + 1);
       setCanvasMode("kanban");
       setPanelMode("chat");
       setPanelOpen(true);
@@ -1064,7 +1122,7 @@ export default function App() {
           type: "REAPPLY_PROMPT_HISTORY",
           payload: { historyId }
         },
-        120_000
+        300_000
       );
       setForceBuildPrompt(false);
       setCanvasMode("kanban");
@@ -1452,6 +1510,44 @@ export default function App() {
     }
   }, [chatBackendId, promptBackends]);
 
+  const orchestratorRuntimeLock = useMemo(() => {
+    const orchestrator = snapshot?.agents.find((agent) => agent.isOrchestrator || agent.role === "orchestrator");
+    const runtime = orchestrator?.runtime;
+    if (!orchestrator || !runtime || runtime.kind !== "cli" || !runtime.backendId || runtime.backendId === "auto") {
+      return undefined;
+    }
+
+    const available = promptBackends.filter((backend) => backend.id !== "auto" && backend.available);
+    const runtimeCanonical = toCanonicalBackendId(runtime.backendId);
+    const matchedBackend = available.find((backend) => toCanonicalBackendId(backend.id) === runtimeCanonical);
+    const lockedBackendId = (matchedBackend?.id ?? available[0]?.id) as Exclude<CliBackend["id"], "auto"> | undefined;
+    if (!lockedBackendId) {
+      return undefined;
+    }
+
+    return {
+      key: `${orchestrator.id}:${runtime.backendId}:${runtime.modelId ?? ""}`,
+      orchestratorName: orchestrator.name,
+      backendId: lockedBackendId,
+      modelId: runtime.modelId?.trim() || undefined
+    };
+  }, [promptBackends, snapshot?.agents]);
+
+  useEffect(() => {
+    if (!orchestratorRuntimeLock) {
+      orchestratorBackendSyncKeyRef.current = "";
+      return;
+    }
+    if (orchestratorBackendSyncKeyRef.current === orchestratorRuntimeLock.key) {
+      return;
+    }
+    orchestratorBackendSyncKeyRef.current = orchestratorRuntimeLock.key;
+    setChatBackendId(orchestratorRuntimeLock.backendId);
+    if (orchestratorRuntimeLock.modelId) {
+      setChatModelId(orchestratorRuntimeLock.modelId);
+    }
+  }, [orchestratorRuntimeLock]);
+
   useEffect(() => {
     if (buildPromptStrategy !== "manual") {
       return;
@@ -1719,6 +1815,12 @@ export default function App() {
     if (!trimmed) {
       return;
     }
+    appendLocalChatMessage(
+      createLocalChatMessage("user", [{ kind: "text", text: trimmed }], {
+        backendId: chatBackendId,
+        model: chatModelId.trim() || undefined
+      })
+    );
     setChatSending(true);
     try {
       await requestToExtension({
@@ -1729,22 +1831,29 @@ export default function App() {
           backendId: chatBackendId,
           modelId: chatModelId.trim() || undefined
         }
-      });
-      setPanelMode("chat");
+      }, 180_000);
       setPanelOpen(true);
+    } catch (error) {
+      showErrorToast(error);
     } finally {
       setChatSending(false);
     }
   };
 
   const confirmChatPlan = async (planId: string) => {
-    await requestToExtension({
+    const result = await requestToExtension<{ runId?: string }>({
       type: "WORK_PLAN_CONFIRM",
       payload: { planId }
     });
     setCanvasMode("kanban");
     setPanelMode("chat");
     setPanelOpen(true);
+    if (result && result.runId) {
+      setActiveRunId(result.runId);
+      setSelectedRunId(result.runId);
+      await subscribeScheduleRun(result.runId);
+      await refreshRunHistory();
+    }
   };
 
   const modifyChatPlan = async (planId: string, modifications: WorkPlanModification[]) => {
@@ -2308,17 +2417,14 @@ export default function App() {
                   <GraphView
                     snapshot={graphSnapshot}
                     hiddenNodeIds={hiddenNodeIds}
+                    autoLayoutSignal={autoLayoutSignal}
                     onSelectNode={(node) => {
                       setSelectedNode(node);
                       setSelectedEdge(undefined);
-                      setPanelMode("chat");
-                      setPanelOpen(true);
                     }}
                     onSelectEdge={(edge) => {
                       setSelectedEdge(edge);
                       setSelectedNode(undefined);
-                      setPanelMode("chat");
-                      setPanelOpen(true);
                     }}
                     onOpenFile={openFile}
                     onCreateOverride={createOverride}
@@ -2329,10 +2435,20 @@ export default function App() {
                     onToggleLibrary={() => setCommandBarOpen(true)}
                     onAddCommonRule={() => setCommonRuleModalOpen(true)}
                     onAddAgent={() => setAgentCreationOpen(true)}
+                    onAddSkill={() => setSkillWizardOpen(true)}
                     onToggleCommandBar={() => setCommandBarOpen(true)}
                     onCreateNote={addNote}
                     onSaveNote={saveNote}
                     onDeleteNote={deleteNote}
+                    onDeleteAgent={(agentId, agentName) => {
+                      const confirmed = window.confirm(
+                        `Delete agent "${agentName}"? This will remove the profile from the workspace.`
+                      );
+                      if (!confirmed) {
+                        return;
+                      }
+                      void deleteAgent(agentId);
+                    }}
                     onDuplicateNote={(text, position) => addNote(position, text)}
                     onScanWorkspace={refreshDiscovery}
                     onImportPack={requestImportPreview}
@@ -2349,6 +2465,7 @@ export default function App() {
                       void insertInteractionPattern(patternId, position).catch(() => undefined);
                     }}
                     onSaveNodePosition={saveNodePosition}
+                    onSaveNodePositions={saveNodePositions}
                     onAgentExpand={(agentId) =>
                       setExpandedAgentId((current) => (current === agentId ? null : agentId))
                     }
@@ -2379,7 +2496,10 @@ export default function App() {
                 expanded={buildPromptExpanded}
                 prompt={buildPromptText}
                 onPromptChange={setBuildPromptText}
-                onBuildTeam={() => void buildTeamFromPromptBar()}
+                onBuildTeam={() => {
+                  buildTeamFromPromptBar().catch(() => undefined);
+                }}
+                canBuild={canBuildTeamFromPrompt}
                 backends={promptBackends}
                 selectedBackend={buildPromptBackendId}
                 onBackendChange={setBuildPromptBackendId}
@@ -2390,6 +2510,9 @@ export default function App() {
                 budgetConstraint={buildPromptBudgetConstraint}
                 onBudgetConstraintChange={setBuildPromptBudgetConstraint}
                 usageSummaries={backendUsageSummaries}
+                claudeQuota={claudeQuota}
+                codexQuota={codexQuota}
+                geminiQuota={geminiQuota}
                 isBuilding={busy}
                 progress={generationProgress}
                 includeExistingAgents={buildPromptIncludeExistingAgents}
@@ -2415,7 +2538,6 @@ export default function App() {
               onModeChange={setPanelMode}
               onOpenFile={openFile}
               onRevealPath={revealPath}
-              onCreateSkill={createSkill}
               onExportSkills={exportSkills}
               onValidateSkill={validateSkill}
               onCreateOverride={createOverride}
@@ -2453,7 +2575,14 @@ export default function App() {
               chatMode={chatMode}
               chatBackendId={chatBackendId}
               chatModelId={chatModelId}
+              chatModelCatalogs={backendModelCatalogs}
               chatSending={chatSending}
+              chatBackendLocked={Boolean(orchestratorRuntimeLock)}
+              chatBackendLockReason={
+                orchestratorRuntimeLock
+                  ? `Locked to orchestrator runtime (${orchestratorRuntimeLock.orchestratorName}).`
+                  : undefined
+              }
               onChatModeChange={setChatMode}
               onChatBackendChange={setChatBackendId}
               onChatModelChange={setChatModelId}
@@ -2486,6 +2615,7 @@ export default function App() {
           contextThreshold={cacheConfig.contextThreshold}
           contextState={contextState}
           backendUsageSummaries={backendUsageSummaries}
+          claudeQuota={claudeQuota}
           showBuildNew={!buildPromptExpanded}
           onBuildNew={() => {
             setForceBuildPrompt(true);
@@ -2584,6 +2714,7 @@ export default function App() {
 
       <AgentCreationModal
         open={agentCreationOpen}
+        modelCatalogs={backendModelCatalogs}
         onClose={() => setAgentCreationOpen(false)}
         onCreate={createAgent}
       />
@@ -2592,6 +2723,8 @@ export default function App() {
         open={Boolean(generatedPreview)}
         structure={generatedPreview?.structure}
         historyId={generatedPreview?.historyId}
+        rebuildMode={hasTeamReady}
+        modelCatalogs={backendModelCatalogs}
         onClose={() => setGeneratedPreview(undefined)}
         onApply={applyGeneratedStructure}
       />
@@ -2752,6 +2885,10 @@ function handleExtensionMessage(
     setSelectedEdge: (edge: Edge | undefined) => void;
     setImportPreview: (preview: SkillPackPreview | undefined) => void;
     setPromptBackends: (backends: CliBackend[]) => void;
+    setBackendModelCatalogs: (catalogs: BackendModelCatalog[]) => void;
+    setClaudeQuota: (quota: ClaudeQuotaSnapshot | undefined) => void;
+    setCodexQuota: (quota: CliSubscriptionQuota | undefined) => void;
+    setGeminiQuota: (quota: CliSubscriptionQuota | undefined) => void;
     setBackendUsageSummaries: (summaries: BackendUsageSummary[]) => void;
     setPromptHistory: (items: PromptHistoryEntry[]) => void;
     setGenerationProgress: (progress: {
@@ -2790,6 +2927,16 @@ function handleExtensionMessage(
     }
     case "CLI_BACKENDS": {
       handlers.setPromptBackends(message.payload.backends);
+      return;
+    }
+    case "BACKEND_MODELS_UPDATE": {
+      handlers.setBackendModelCatalogs(message.payload.catalogs ?? []);
+      return;
+    }
+    case "BACKEND_QUOTA_UPDATE": {
+      handlers.setClaudeQuota(message.payload.claude);
+      handlers.setCodexQuota(message.payload.codex);
+      handlers.setGeminiQuota(message.payload.gemini);
       return;
     }
     case "COLLAB_EVENT": {

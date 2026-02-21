@@ -142,13 +142,13 @@ function pickModel(
   }
   if (backendId === "claude") {
     if (role === "orchestrator" || role === "planner" || role === "reviewer") {
-      return profile.models.find((model) => model.id === "sonnet-4.5")?.id ?? profile.models[0].id;
+      return profile.models.find((model) => model.id === "claude-sonnet-4-5-20250929")?.id ?? profile.models[0].id;
     }
     return profile.models.find((model) => model.tier === "fast")?.id ?? profile.models[0].id;
   }
   if (backendId === "codex") {
     if (role === "coder" || role === "tester") {
-      return profile.models.find((model) => model.id === "o3-mini")?.id ?? profile.models[0].id;
+      return profile.models.find((model) => model.id === "gpt-4.1")?.id ?? profile.models[0].id;
     }
     return profile.models.find((model) => model.id === "codex-1")?.id ?? profile.models[0].id;
   }

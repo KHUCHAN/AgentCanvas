@@ -131,8 +131,15 @@ export default function TaskPanel(props: TaskPanelProps) {
                 <div className="item-title">{task.title}</div>
                 <div className="item-subtitle">
                   {agentNameById.get(task.agentId) ?? task.agentId} · {task.status}
-                  {typeof task.progress === "number" ? ` · ${Math.round(task.progress * 100)}%` : ""}
                 </div>
+                {typeof task.progress === "number" && task.status === "running" && (
+                  <div className="task-panel-progress">
+                    <div
+                      className="task-panel-progress-fill"
+                      style={{ width: `${Math.round(task.progress * 100)}%` }}
+                    />
+                  </div>
+                )}
               </button>
               {(task.status === "running" || task.status === "planned" || task.status === "ready") && (
                 <button type="button" onClick={() => props.onCancelTask(task.id)}>

@@ -39,6 +39,7 @@ import { applyTidyLayout } from "./layout/tidyLayout";
 type GraphViewProps = {
   snapshot?: DiscoverySnapshot;
   hiddenNodeIds: Set<string>;
+  autoLayoutSignal: number;
   onSelectNode: (node?: Node) => void;
   onSelectEdge: (edge?: Edge) => void;
   onOpenFile: (path: string) => void;
@@ -47,6 +48,7 @@ type GraphViewProps = {
   onHideNode: (nodeId: string) => void;
   onToggleLibrary: () => void;
   onAddAgent: () => void;
+  onAddSkill: () => void;
   onAddCommonRule: () => void;
   onRevealPath: (path: string) => void;
   onExportSkill: (skillId: string) => void;
@@ -54,6 +56,7 @@ type GraphViewProps = {
   onCreateNote: (position: Position, text?: string) => void;
   onSaveNote: (noteId: string, text: string, position?: Position) => void;
   onDeleteNote: (noteId: string) => void;
+  onDeleteAgent: (agentId: string, agentName: string) => void;
   onDuplicateNote: (text: string, position: Position) => void;
   onScanWorkspace: () => void;
   onImportPack: () => void;
@@ -66,6 +69,7 @@ type GraphViewProps = {
   onAssignMcpToAgent: (agentId: string, mcpServerId: string) => void;
   onDropPattern: (patternId: string, position: Position) => void;
   onSaveNodePosition: (nodeId: string, position: Position) => void;
+  onSaveNodePositions?: (positions: Array<{ nodeId: string; position: Position }>) => void;
   onAgentExpand: (agentId: string) => void;
   agentExecutionStateById?: Record<
     string,
@@ -120,6 +124,7 @@ function GraphCanvas({
   onHideNode,
   onToggleLibrary,
   onAddAgent,
+  onAddSkill,
   onAddCommonRule,
   onRevealPath,
   onExportSkill,
@@ -127,6 +132,7 @@ function GraphCanvas({
   onCreateNote,
   onSaveNote,
   onDeleteNote,
+  onDeleteAgent,
   onDuplicateNote,
   onScanWorkspace,
   onImportPack,
@@ -139,7 +145,9 @@ function GraphCanvas({
   onAssignMcpToAgent,
   onDropPattern,
   onSaveNodePosition,
+  onSaveNodePositions,
   onAgentExpand,
+  autoLayoutSignal,
   agentExecutionStateById,
   activeDelegationEdgeIds,
   doneDelegationEdgeIds
@@ -211,6 +219,7 @@ function GraphCanvas({
   const [nodes, setNodes, onNodesChange] = useNodesState(mappedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(mappedEdges);
   const prevVisibleNodeCountRef = useRef(0);
+  const lastAutoLayoutSignalRef = useRef(0);
 
   useEffect(() => {
     setNodes(mappedNodes);
@@ -239,6 +248,31 @@ function GraphCanvas({
       onSelectNode(undefined);
     }
   }, [nodes, onSelectNode, selectedNodeId]);
+
+  useEffect(() => {
+    if (autoLayoutSignal <= 0) {
+      return;
+    }
+    if (lastAutoLayoutSignalRef.current === autoLayoutSignal) {
+      return;
+    }
+    lastAutoLayoutSignalRef.current = autoLayoutSignal;
+
+    setNodes((currentNodes) => {
+      const nextNodes = applyTidyLayout(currentNodes, edges);
+      if (onSaveNodePositions) {
+        const positions = nextNodes.map((node) => ({
+          nodeId: node.id,
+          position: { x: node.position.x, y: node.position.y }
+        }));
+        onSaveNodePositions(positions);
+      }
+      window.requestAnimationFrame(() => {
+        reactFlow.fitView({ duration: 180, padding: 0.2 });
+      });
+      return nextNodes;
+    });
+  }, [autoLayoutSignal, edges, onSaveNodePositions, reactFlow, setNodes]);
 
   const onNodeClick = useCallback<NodeMouseHandler>(
     (_event, node) => {
@@ -378,9 +412,19 @@ function GraphCanvas({
         return;
       }
 
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedNode?.type === "note") {
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedNode) {
         event.preventDefault();
-        onDeleteNote(selectedNode.id);
+        if (selectedNode.type === "note") {
+          onDeleteNote(selectedNode.id);
+        } else if (selectedNode.type === "agent") {
+          const data = selectedNode.data as Record<string, unknown>;
+          onDeleteAgent(
+            String(data.id ?? selectedNode.id),
+            String(data.name ?? "Agent")
+          );
+        } else {
+          onHideNode(selectedNode.id);
+        }
         selectNode(undefined);
         return;
       }
@@ -429,6 +473,7 @@ function GraphCanvas({
     };
   }, [
     addNote,
+    onDeleteAgent,
     nodes,
     onDeleteNote,
     onOpenAgentDetail,
@@ -447,7 +492,7 @@ function GraphCanvas({
         return;
       }
 
-      event.preventDefault();
+      event.stopPropagation();
       if (event.deltaY > 0) {
         reactFlow.zoomOut({ duration: 50 });
       } else {
@@ -529,9 +574,11 @@ function GraphCanvas({
         connectionMode={ConnectionMode.Loose}
         proOptions={{ hideAttribution: true }}
         panOnDrag={panModifierActive ? [0, 1, 2] : [1, 2]}
+        panOnScroll={false}
         nodesDraggable={!panModifierActive}
         selectionOnDrag={!panModifierActive}
         zoomOnScroll={false}
+        preventScrolling={false}
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1.1} color={gridDotColor} />
       </ReactFlow>
@@ -565,6 +612,14 @@ function GraphCanvas({
           aria-label="Create agent"
         >
           + Agent
+        </button>
+        <button
+          className="canvas-add-agent"
+          onClick={onAddSkill}
+          title="Create skill"
+          aria-label="Create skill"
+        >
+          + Skill
         </button>
         <button
           className="canvas-common-rule"

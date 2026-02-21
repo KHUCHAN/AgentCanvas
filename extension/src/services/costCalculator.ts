@@ -8,19 +8,31 @@ type PricingEntry = {
   output: number;
 };
 
-const DEFAULT_MODEL = "sonnet-4.5";
+const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 
 const DEFAULT_PRICING: Record<string, PricingEntry> = {
+  "claude-sonnet-4-5-20250929": { input: 3.0, cacheWrite: 3.75, cacheRead: 0.3, output: 15.0 },
+  "claude-haiku-4-5-20251001": { input: 0.8, cacheWrite: 1.0, cacheRead: 0.08, output: 4.0 },
+  "claude-opus-4-5-20251101": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 },
   "sonnet-4.5": { input: 3.0, cacheWrite: 3.75, cacheRead: 0.3, output: 15.0 },
   "haiku-4.5": { input: 0.8, cacheWrite: 1.0, cacheRead: 0.08, output: 4.0 },
   "opus-4.5": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 },
   // Codex / OpenAI pricing
+  "gpt-4.1": { input: 2.0, cacheWrite: 0, cacheRead: 0, output: 8.0 },
+  "gpt-4.1-mini": { input: 0.4, cacheWrite: 0, cacheRead: 0, output: 1.6 },
+  "gpt-4.1-nano": { input: 0.2, cacheWrite: 0, cacheRead: 0, output: 0.8 },
+  "gpt-4o": { input: 2.5, cacheWrite: 0, cacheRead: 0, output: 10.0 },
+  "gpt-4o-mini": { input: 0.6, cacheWrite: 0, cacheRead: 0, output: 2.4 },
   "o3-mini": { input: 1.1, cacheWrite: 0, cacheRead: 0, output: 4.4 },
   "o3": { input: 10.0, cacheWrite: 0, cacheRead: 0, output: 40.0 },
+  "o4-mini": { input: 1.0, cacheWrite: 0, cacheRead: 0, output: 4.0 },
   "codex-1": { input: 5.0, cacheWrite: 0, cacheRead: 0, output: 20.0 },
   // Gemini pricing
   "gemini-2.5-flash": { input: 0.15, cacheWrite: 0.0375, cacheRead: 0.015, output: 0.6 },
-  "gemini-2.5-pro": { input: 1.25, cacheWrite: 0.3125, cacheRead: 0.125, output: 10.0 }
+  "gemini-2.5-flash-lite": { input: 0.075, cacheWrite: 0.01875, cacheRead: 0.0075, output: 0.3 },
+  "gemini-2.5-pro": { input: 1.25, cacheWrite: 0.3125, cacheRead: 0.125, output: 10.0 },
+  "gemini-2.0-flash": { input: 0.1, cacheWrite: 0.025, cacheRead: 0.01, output: 0.4 },
+  "gemini-2.0-flash-lite": { input: 0.075, cacheWrite: 0.01875, cacheRead: 0.0075, output: 0.3 }
 };
 const PRICING = loadPricingTable();
 
@@ -32,17 +44,56 @@ export function resolvePricingModel(modelId?: string): string {
     return modelId;
   }
   const lower = modelId.toLowerCase();
+  if (lower === "sonnet" || lower.includes("sonnet-4.5")) {
+    return "claude-sonnet-4-5-20250929";
+  }
+  if (lower === "haiku" || lower.includes("haiku-4.5")) {
+    return "claude-haiku-4-5-20251001";
+  }
+  if (lower === "opus" || lower.includes("opus-4.5")) {
+    return "claude-opus-4-5-20251101";
+  }
   if (lower.includes("gemini")) {
     return "gemini-2.5-flash";
   }
   if (lower.includes("codex")) {
     return "codex-1";
   }
+  if (lower === "codex-latest") {
+    return "codex-1";
+  }
+  if (lower.includes("gpt-4.1")) {
+    return "gpt-4.1";
+  }
+  if (lower === "gpt-4.1-latest") {
+    return "gpt-4.1";
+  }
+  if (lower.includes("gpt-4o")) {
+    return "gpt-4o";
+  }
+  if (lower === "gpt-4o-latest") {
+    return "gpt-4o";
+  }
   if (lower.includes("o3-mini")) {
     return "o3-mini";
   }
   if (lower === "o3") {
     return "o3";
+  }
+  if (lower.includes("o4-mini")) {
+    return "o4-mini";
+  }
+  if (lower === "gemini-flash" || lower === "gemini-2.5-flash-latest") {
+    return "gemini-2.5-flash";
+  }
+  if (lower === "gemini-flash-lite" || lower === "gemini-2.5-flash-lite-latest") {
+    return "gemini-2.5-flash-lite";
+  }
+  if (lower === "gemini-pro" || lower === "gemini-2.5-pro-latest") {
+    return "gemini-2.5-pro";
+  }
+  if (lower === "gemini-2.0-flash-lite-latest") {
+    return "gemini-2.0-flash-lite";
   }
   return DEFAULT_MODEL;
 }

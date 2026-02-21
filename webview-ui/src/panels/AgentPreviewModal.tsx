@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  BackendModelCatalog,
   CanonicalBackendId,
   GeneratedAgentStructure
 } from "../messaging/protocol";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { getModelOptionsForBackend } from "../utils/modelOptions";
 
 type AgentPreviewModalProps = {
   open: boolean;
   structure?: GeneratedAgentStructure;
   historyId?: string;
+  rebuildMode?: boolean;
+  modelCatalogs?: BackendModelCatalog[];
   onClose: () => void;
   onApply: (payload: {
     structure: GeneratedAgentStructure;
@@ -30,11 +34,13 @@ export default function AgentPreviewModal({
   open,
   structure,
   historyId,
+  rebuildMode = false,
+  modelCatalogs,
   onClose,
   onApply
 }: AgentPreviewModalProps) {
   const [createSuggestedSkills, setCreateSuggestedSkills] = useState(true);
-  const [overwriteExisting, setOverwriteExisting] = useState(false);
+  const [overwriteExisting, setOverwriteExisting] = useState(Boolean(rebuildMode));
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<GeneratedAgentStructure>();
   const modalRef = useRef<HTMLDivElement>(null);
@@ -43,7 +49,7 @@ export default function AgentPreviewModal({
   useEffect(() => {
     if (!open) {
       setCreateSuggestedSkills(true);
-      setOverwriteExisting(false);
+      setOverwriteExisting(Boolean(rebuildMode));
       setBusy(false);
       setDraft(undefined);
       return;
@@ -53,7 +59,8 @@ export default function AgentPreviewModal({
       return;
     }
     setDraft(cloneStructure(structure));
-  }, [open, structure]);
+    setOverwriteExisting(Boolean(rebuildMode));
+  }, [open, rebuildMode, structure]);
 
   useEffect(() => {
     if (!open) {
@@ -74,6 +81,12 @@ export default function AgentPreviewModal({
       return new Set<CanonicalBackendId>();
     }
     return new Set(draft.backendUsageAtBuild.map((summary) => summary.backendId));
+  }, [draft]);
+  const hasUsageHistory = useMemo(() => {
+    if (!draft) {
+      return false;
+    }
+    return draft.backendUsageAtBuild.some((summary) => hasUsageData(summary));
   }, [draft]);
 
   if (!open || !draft) {
@@ -123,27 +136,35 @@ export default function AgentPreviewModal({
             )}
           </div>
 
-          {draft.backendUsageAtBuild.length > 0 && (
-            <div className="inspector-block">
-              <div className="inspector-title">Backend usage snapshot</div>
-              <div className="agent-detail-list">
-                {draft.backendUsageAtBuild.map((summary) => (
-                  <div key={summary.backendId} className="agent-detail-item">
-                    <div className="agent-detail-item-header">
-                      <div className="item-title">{toBackendTitle(summary.backendId)}</div>
-                      <span className="pill">{Math.round((1 - summary.availabilityScore) * 100)}% used</span>
-                    </div>
-                    <div className="node-meta">
-                      Today: ${summary.today.estimatedCost.toFixed(2)} · {summary.today.callCount} calls
-                    </div>
-                    <div className="node-meta">
-                      Week: ${summary.thisWeek.estimatedCost.toFixed(2)} · Month: ${summary.thisMonth.estimatedCost.toFixed(2)}
-                    </div>
-                  </div>
-                ))}
+          <div className="inspector-block">
+            <div className="inspector-title">Backend usage snapshot</div>
+            {!hasUsageHistory && (
+              <div className="node-meta">
+                No usage history yet (first run). Usage metrics will appear after CLI execution.
               </div>
-            </div>
-          )}
+            )}
+            {draft.backendUsageAtBuild.length > 0 && (
+              <div className="agent-detail-list">
+                {draft.backendUsageAtBuild.map((summary) => {
+                  const hasData = hasUsageData(summary);
+                  return (
+                    <div key={summary.backendId} className="agent-detail-item">
+                      <div className="agent-detail-item-header">
+                        <div className="item-title">{toBackendTitle(summary.backendId)}</div>
+                        <span className="pill">{hasData ? `${Math.round((1 - summary.availabilityScore) * 100)}% used` : "No data"}</span>
+                      </div>
+                      <div className="node-meta">
+                        Today: ${summary.today.estimatedCost.toFixed(2)} · {summary.today.callCount} calls
+                      </div>
+                      <div className="node-meta">
+                        Week: ${summary.thisWeek.estimatedCost.toFixed(2)} · Month: ${summary.thisMonth.estimatedCost.toFixed(2)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <div className="inspector-block">
             <div className="inspector-title">Agents ({draft.agents.length})</div>
@@ -188,7 +209,7 @@ export default function AgentPreviewModal({
                     </label>
                     <label>
                       Model
-                      <input
+                      <select
                         value={agent.assignedModel ?? ""}
                         onChange={(event) =>
                           setDraft((previous) => {
@@ -206,8 +227,16 @@ export default function AgentPreviewModal({
                             };
                           })
                         }
-                        placeholder="optional model id"
-                      />
+                      >
+                        <option value="">Backend default</option>
+                        {agent.assignedModel &&
+                          !getModelOptionsForBackend(agent.assignedBackend, modelCatalogs).some((option) => option.id === agent.assignedModel) && (
+                            <option value={agent.assignedModel}>{agent.assignedModel} (custom)</option>
+                          )}
+                        {getModelOptionsForBackend(agent.assignedBackend, modelCatalogs).map((option) => (
+                          <option key={option.id} value={option.id}>{option.label}</option>
+                        ))}
+                      </select>
                     </label>
                   </div>
 
@@ -304,4 +333,15 @@ function toBackendTitle(backendId: CanonicalBackendId): string {
     return "Aider";
   }
   return "Custom";
+}
+
+function hasUsageData(summary: GeneratedAgentStructure["backendUsageAtBuild"][number]): boolean {
+  return (
+    summary.today.callCount > 0 ||
+    summary.thisWeek.callCount > 0 ||
+    summary.thisMonth.callCount > 0 ||
+    summary.today.estimatedCost > 0 ||
+    summary.thisWeek.estimatedCost > 0 ||
+    summary.thisMonth.estimatedCost > 0
+  );
 }

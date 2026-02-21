@@ -1,6 +1,115 @@
 # AgentCanvas Framework — 아키텍처, 에이전트 시스템, 프로토콜
 
-**Date**: 2026-02-19
+**Date**: 2026-02-19 (용어 정의 추가: 2026-02-20)
+
+---
+
+## 0. 핵심 용어 정의 (Glossary)
+
+> AgentCanvas 전체 문서에서 공통으로 사용하는 핵심 개념입니다. 모든 문서는 이 정의를 따릅니다.
+
+### Skill (스킬) — 정적 능력
+
+**정의:** Agent가 보유하는 **재사용 가능한 지침·도구 패키지**. `SKILL.md` 파일을 필수로 포함하는 폴더 단위.
+
+```
+Skill = SKILL.md (frontmatter + instructions) + (optional) scripts/ + references/ + assets/
+```
+
+| 속성 | 설명 |
+|------|------|
+| 본질 | "무엇을 **할 수 있는가**" — Agent의 역량/도구 |
+| 생명주기 | **영속적** — 프로젝트에 파일로 존재, 여러 실행에 걸쳐 재사용 |
+| 소유자 | Agent (`ownerAgentId`) |
+| 스코프 | project / personal / shared / global |
+| 발견 | 파일 시스템 스캔 (.github/skills/, .claude/skills/, .agents/skills/ 등) |
+| 호출 방식 | Agent가 Task 실행 중 description 매칭으로 **자동 활성화** 또는 명시 호출 |
+| 점진적 로딩 | Level 1: name/description만 로드 → Level 2: SKILL.md 본문 로드 → Level 3: 스크립트/리소스 로드 |
+| UI 표현 | AgentDetailModal → Skills 탭, Node Library, SkillNode (캔버스) |
+
+**예시:** `code-review` 스킬, `test-runner` 스킬, `docs-writer` 스킬
+
+### Task (태스크) — 동적 작업 단위
+
+**정의:** 한 번의 실행(Run)에서 생성되는 **구체적 작업 단위**. Orchestrator가 사용자의 Work Prompt를 분해하여 생성하며, 각 Task는 특정 Agent에 할당됨.
+
+```
+Work Prompt → Orchestrator 분해 → Task[] 생성 → Agent별 할당 → 실행 → 결과
+```
+
+| 속성 | 설명 |
+|------|------|
+| 본질 | "무엇을 **해야 하는가**" — 구체적 실행 지시 |
+| 생명주기 | **일시적** — Run 시작 시 생성, 완료/실패로 종료 |
+| 상태 | `planned` → `ready` → `running` → `done` / `failed` / `blocked` / `canceled` |
+| 할당 | Agent (`agentId`) |
+| 의존성 | `deps: string[]` — 선행 Task ID 목록 |
+| 시간 속성 | `estimateMs`, `plannedStartMs`, `actualStartMs`, `progress` (0~1) |
+| UI 표현 | 칸반 카드, Schedule 타임라인 블록, Task 탭 Active Tasks |
+
+**예시:** "PR #42의 auth 모듈 코드 리뷰", "API 엔드포인트 리팩터링", "단위 테스트 작성"
+
+### Run (실행) — 작업 세션
+
+**정의:** 사용자가 Work Prompt를 제출한 시점부터 모든 Task가 완료될 때까지의 **실행 세션**.
+
+| 속성 | 설명 |
+|------|------|
+| 본질 | Task들의 실행 컨테이너 |
+| 구성 | 1개 Run = N개 Task |
+| 트리거 | 사용자가 Task 탭에서 `[▶ Submit Work]` 클릭 |
+| 추적 | Run ID로 히스토리 관리 |
+| UI 표현 | Task 탭 History, Run 탭 로그 |
+
+### Agent (에이전트) — 실행 주체
+
+**정의:** Skill을 보유하고 Task를 수행하는 **AI 실행 주체**. Orchestrator(지휘자) 또는 Worker(작업자) 역할.
+
+| 속성 | 설명 |
+|------|------|
+| 보유 | Skill[] (정적 능력), MCP Server[] (외부 도구) |
+| 수행 | Task[] (동적 작업) |
+| 역할 | orchestrator / coder / tester / writer / researcher / reviewer / planner / custom |
+
+### 관계 요약
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        STATIC (설계 시)                          │
+│                                                                  │
+│   Agent ──── has ────→ Skill[]     "할 수 있는 것"               │
+│     │                    │                                       │
+│     │                    └── SKILL.md (지침 + 리소스)             │
+│     │                                                            │
+│     └──── has ────→ MCP Server[]   "접근 가능한 외부 도구"        │
+│                                                                  │
+├──────────────────────────────────────────────────────────────────┤
+│                       DYNAMIC (실행 시)                           │
+│                                                                  │
+│   User ─── submits Work Prompt ───→ Orchestrator                 │
+│                                         │                        │
+│                                    decomposes                    │
+│                                         │                        │
+│                                    Task[] 생성                   │
+│                                    │    │    │                   │
+│                               Task-A Task-B Task-C               │
+│                               (Agent1)(Agent2)(Agent3)           │
+│                                                                  │
+│   Agent가 Task 실행 시 보유한 Skill을 자동으로 활용              │
+│   (description 매칭 → SKILL.md 로드 → 지침에 따라 수행)          │
+│                                                                  │
+│   전체 = 1 Run (실행 세션)                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 혼동하기 쉬운 포인트
+
+| 혼동 | 올바른 구분 |
+|------|-----------|
+| "Skill을 실행한다" | ✗ Skill은 실행되지 않음. Agent가 **Task를 실행**할 때 보유한 Skill을 **활용**함 |
+| "Task를 만든다 = Run Task" | ✗ 사용자는 **Work Prompt를 제출**함. Orchestrator가 Task를 **생성**함 |
+| "Skill = 작업" | ✗ Skill은 **능력**(how), Task는 **작업**(what) |
+| "Run = Task" | ✗ Run은 **세션**(여러 Task의 컨테이너), Task는 **개별 작업** |
 
 ---
 

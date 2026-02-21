@@ -1,11 +1,13 @@
 import ChatInput from "./ChatInput";
 import ChatMessageList from "./ChatMessageList";
 import type {
+  BackendModelCatalog,
   ChatMessage,
   ChatMode,
   CliBackend,
   WorkPlanModification
 } from "../messaging/protocol";
+import { backendDisplayNameFromId } from "../utils/modelOptions";
 
 type ChatPanelProps = {
   hasTeam: boolean;
@@ -14,7 +16,10 @@ type ChatPanelProps = {
   backendId: Exclude<CliBackend["id"], "auto">;
   modelId?: string;
   backends: CliBackend[];
+  modelCatalogs?: BackendModelCatalog[];
   sending?: boolean;
+  backendLocked?: boolean;
+  backendLockReason?: string;
   onModeChange: (mode: ChatMode) => void;
   onBackendChange: (backendId: Exclude<CliBackend["id"], "auto">) => void;
   onModelChange: (modelId: string) => void;
@@ -29,6 +34,9 @@ type ChatPanelProps = {
 export default function ChatPanel(props: ChatPanelProps) {
   return (
     <div className="chat-panel">
+      <div className="chat-panel-meta">
+        Orchestrator backend: {backendDisplayNameFromId(props.backendId)}
+      </div>
       {props.messages.length === 0 && (
         <div className="chat-empty">
           {props.hasTeam
@@ -57,7 +65,10 @@ export default function ChatPanel(props: ChatPanelProps) {
         backendId={props.backendId}
         modelId={props.modelId}
         backends={props.backends}
+        modelCatalogs={props.modelCatalogs}
         disabled={props.sending}
+        backendLocked={props.backendLocked}
+        backendLockReason={props.backendLockReason}
         onModeChange={props.onModeChange}
         onBackendChange={props.onBackendChange}
         onModelChange={props.onModelChange}

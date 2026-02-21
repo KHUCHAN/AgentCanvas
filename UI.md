@@ -213,19 +213,37 @@ Lucide React 아이콘 라이브러리 사용을 권장합니다:
 - Rule chain은 중앙 근처 (x ≈ 420)
 - Skills는 우측 컬럼 (x ≈ 820)
 
-### 2.3 Right Panel UI 구조
+### 2.3 Right Panel UI 구조 (REV-2026-02-20 개정)
+
+> ⚠️ REV 적용: AI Prompt 탭, Memory 탭 삭제. Task 탭 신규. 스크롤 필수.
+
+#### 탭 구성 (개정 후)
+
+| 탭 | 기능 | 비고 |
+|---|---|---|
+| **Node Library** | 스킬, 패턴, MCP 서버, 규칙 문서 브라우징 | 유지 |
+| **Inspector** | 선택 노드/엣지 상세 정보 + 편집 | 유지, 스크롤 수정 |
+| **Task** ★신규 | 작업 지시 프롬프트 + 실행 + 히스토리 | AI Prompt/Run 대체 |
+| **Run** | 실행 로그 스트리밍 + 이벤트 모니터링 | 유지 |
+| ~~AI Prompt~~ | ~~삭제~~ | → 캔버스 하단 BuildPromptBar |
+| ~~Memory~~ | ~~삭제~~ | → Orchestrator 자동 / Settings |
 
 #### Inspector 탭
 - 선택 노드의 상세 정보 표시
 - 노드별 편집 액션 제공
+- **스크롤:** `flex: 1; overflow-y: auto; min-height: 0` 필수
 
 #### Library 탭 (+)
-- New Skill
-- Import Pack
-- Create Override
-- Sticky Note
+- New Skill, Import Pack, Create Override, Sticky Note
 
-#### Agent Manage 탭 (Agent 선택 시)
+#### Task 탭 ★신규 (기존 AI Prompt + Run 기능 흡수)
+- **Work 섹션:** textarea + `[▶ Submit Work]` 버튼. Orchestrator에게 작업 전달
+- **History 섹션:** 실행 기록 리스트, 클릭 시 해당 Run 상세 표시
+- 실행 시 Task[] 자동 분해 → 칸반 카드 생성
+
+#### Agent 관리 (더블클릭 모달)
+
+> ★ 변경: Agent 노드 **더블클릭** 시 `AgentDetailModal` 팝업으로 관리
 
 **서브탭: Overview / Skills / Rules / MCP**
 
@@ -236,33 +254,33 @@ Lucide React 아이콘 라이브러리 사용을 권장합니다:
 
 **Rules 서브탭:**
 - Common Rules 섹션 (CommonRulesNode와 동일 목록)
-- Agent-specific chain 섹션:
-  - (Codex) discoverCodexAgentsChain(cwd) 결과를 orderIndex 순서로 표시
-  - Create override: 현재 디렉터리에 AGENTS.override.md 생성
-  - truncated 경고 표시
+- Agent-specific chain 섹션
 
 **MCP 서브탭:**
 - Codex MCP 목록: config.toml의 [mcp_servers.*] read
 - VS Code MCP 목록: .vscode/mcp.json read
 - Add server wizard + diff preview + apply
-- Security: stdio server는 "arbitrary code" 경고 배너 표시
 
-### 2.4 화면 구성 (n8n 느낌)
+### 2.4 화면 구성 (개정 후)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│ Top Bar: Active Agent selector | Refresh | Export/Import Pack | ... │
-├──────────────┬────────────────────────────────────────┬──────────────┤
-│              │                                        │              │
-│ Left         │  Canvas: dot-grid + floating controls │ Right Panel  │
-│ Sidebar:     │  - Agent nodes (overview)             │ Inspector    │
-│              │  - CommonRulesNode (pinned top-right) │ Library      │
-│ Providers/   │  - [Expand] Skill/Rule nodes          │ Agent Manage │
-│ Agents/      │                                        │              │
-│ Packs/       │ Floating controls (fit/zoom/reset...) │              │
-│ Settings     │                                        │              │
-│              │                                        │              │
-└──────────────┴────────────────────────────────────────┴──────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ 🟢 AgentCanvas    [Kanban│Graph│Schedule]              ⚙ Settings  ⌘K │
+├────────────────────────────┬───────────────────────────┬────────────────┤
+│                            │                           │                │
+│  [+] [+ Agent] [+ Rule]   │                           │  Right Panel   │
+│                            │                           │  Node Library  │
+│                            │  Canvas (모니터링 대시보드) │  Inspector     │
+│                            │  - Agent 노드 + 실시간 상태 │  Task ★신규    │
+│                            │  - 데이터 흐름 애니메이션    │  Run           │
+│                            │  - 프로그레스/에러 표시      │                │
+│                            │                           │                │
+│                            │  ┌──────────────────────┐ │                │
+│                            │  │ Build Prompt (하단)   │ │                │
+│                            │  └──────────────────────┘ │                │
+├────────────────────────────┴───────────────────────────┴────────────────┤
+│  Agents 4 · Tasks 5 · Done 2 · Errors 0                [▶ Build New]   │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -663,3 +681,225 @@ BRANDING_GUIDE.md에 정의된 디자인 시스템 기준:
 ---
 
 **이 문서는 AgentCanvas 프로젝트의 브랜딩, UI 컴포넌트 아키텍처, CSS 디자인 시스템, 디자인 검증 결과를 통합 관리하는 마스터 가이드입니다.**
+
+---
+
+## 6. 2차 개정 — 컴포넌트 추가 & 레이아웃 수정 (2026-02-20)
+
+> 코드 검증 결과를 반영한 UI 컴포넌트 추가 스펙
+
+### 6.1 TeamPanel 컴포넌트 수정
+
+**파일:** `webview-ui/src/panels/TeamPanel.tsx`
+
+#### 현재 상태 (검증 완료)
+- `+ Agent` 버튼: ✅ 구현됨 (line 74)
+- `+ Skill` 버튼: ❌ 미구현
+- `Rebuild` 버튼: ✅ 구현됨 (line 75)
+
+#### 수정 스펙
+
+```tsx
+// 버튼 레이아웃: [+ Agent] [+ Skill] [Rebuild]
+<div className="team-panel-inline-actions">
+  <button type="button" onClick={props.onCreateAgent}>+ Agent</button>
+  <button type="button" onClick={props.onCreateSkill}>+ Skill</button>
+  <button type="button" onClick={props.onRebuildTeam}>Rebuild</button>
+</div>
+```
+
+```css
+/* team-panel-inline-actions — 세 버튼 균일 배치 */
+.team-panel-inline-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.team-panel-inline-actions button {
+  flex: 1;
+  min-width: 60px;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+```
+
+---
+
+### 6.2 RightPanel — New Skill 섹션 제거
+
+**파일:** `webview-ui/src/panels/RightPanel.tsx`
+
+#### 현재 상태 (검증 완료)
+- `newSkill` LibrarySectionKey: ❌ 여전히 존재 (line 131)
+- "New Skill" 섹션 UI: ❌ 여전히 존재
+
+#### 제거 대상
+
+```tsx
+// 삭제할 type 멤버
+type LibrarySectionKey = "skills" | "agents" | "patterns" | "mcp" | "rules";
+// "newSkill" 제거
+
+// 삭제할 state
+// newSkill: false (collapsedSections 초기값에서 제거)
+
+// 삭제할 UI 블록 (line 625~631 및 하위 form 전체)
+// <button onClick={() => toggleLibrarySection("newSkill")}>
+//   <span>New Skill</span>
+// </button>
+// {!collapsedSections.newSkill && ( ... form ... )}
+
+// 삭제할 state
+// const [skillName, setSkillName] = useState("");
+// const [skillDescription, setSkillDescription] = useState("");
+```
+
+---
+
+### 6.3 AgentCreationModal — Backend & Model 필드 추가
+
+**파일:** `webview-ui/src/panels/AgentCreationModal.tsx`
+
+#### 현재 상태 (검증 완료)
+- Backend 선택 필드: ❌ 없음
+- Model 선택 필드: ❌ 없음
+
+#### 추가 UI 레이아웃
+
+```
+[Name        ] [Role ▾    ]
+[Backend ▾   ] [Model ▾   ]
+[Role label  ]
+[Description ]
+[ ] Is Orchestrator
+[System Prompt              ]
+[Cancel] [Create Agent]
+```
+
+Backend 선택 시 Model 드롭다운이 해당 Backend의 모델 목록으로 동적 변경.
+`MODEL_OPTIONS`는 `webview-ui/src/utils/modelOptions.ts`에서 임포트.
+
+---
+
+### 6.4 ChatInput — Backend 동기화 & Model Dropdown
+
+**파일:** `webview-ui/src/panels/ChatInput.tsx`
+
+#### 현재 상태 (검증 완료)
+- Backend select: ✅ 구현됨
+- Model: ❌ `<input>` 자유 입력 (line 68) — `<select>` 전환 필요
+- Orchestrator lock 상태 표시: ❌ 없음
+
+#### 수정 스펙
+
+```tsx
+// Backend select에 orchestrator lock 표시
+<select
+  value={props.backendId}
+  onChange={...}
+  disabled={props.disabled || props.orchestratorLocked}
+>
+  {/* orchestratorLocked일 때 title에 안내 */}
+</select>
+{props.orchestratorLocked && (
+  <span className="chat-backend-locked-hint">
+    Orchestrator 고정
+  </span>
+)}
+
+// Model: input → select
+{(MODEL_OPTIONS[props.backendId] ?? []).length > 0 ? (
+  <select value={props.modelId ?? ""} onChange={...}>
+    <option value="">기본 모델</option>
+    {MODEL_OPTIONS[props.backendId].map((m) => (
+      <option key={m.id} value={m.id}>{m.label}</option>
+    ))}
+  </select>
+) : (
+  <input value={props.modelId ?? ""} placeholder="model (optional)" ... />
+)}
+```
+
+---
+
+### 6.5 Build Prompt Bar & Canvas Controls 레이아웃
+
+**파일:** `webview-ui/src/styles.css`
+
+#### 현재 상태 (검증 완료)
+```css
+/* 현재 — 겹침 발생 */
+.build-prompt-bar { bottom: 32px; z-index: 12; }
+.canvas-controls  { bottom: 14px; z-index: 5;  }  /* ← bar에 가려짐 */
+```
+
+#### 수정 스펙
+
+```css
+/* canvas-controls를 build-prompt-bar 위로 올림 */
+.canvas-controls {
+  position: absolute;
+  right: 14px;
+  bottom: 90px;    /* build-prompt-bar 높이(~50px) + 여유 40px */
+  z-index: 15;     /* bar(12)보다 높게 */
+}
+
+/* build-prompt-bar는 더 아래로 */
+.build-prompt-bar {
+  bottom: 16px;    /* 32px → 16px */
+  z-index: 12;
+}
+```
+
+**또는 canvas-controls를 우측 수직 배치 (대안):**
+```css
+.canvas-controls {
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  flex-direction: column;
+  bottom: auto;
+}
+```
+
+---
+
+### 6.6 팀 생성 후 자동 레이아웃
+
+**관련 파일:**
+- `webview-ui/src/canvas/GraphView.tsx` — `autoLayoutSignal` prop 수신
+- `webview-ui/src/App.tsx` — 팀 Apply 후 signal 발신
+- `webview-ui/src/canvas/layout/tidyLayout.ts` — 기존 tidy 로직 재활용
+
+#### 현재 상태 (검증 완료)
+- `applyTidyLayout` 함수: ✅ 존재 (`tidyLayout.ts`)
+- 자동 실행 트리거: ❌ 없음 (사용자가 "Tidy" 버튼 클릭 시만 실행)
+
+#### 자동 레이아웃 배치 규칙 (기존 tidyLayout.ts 기준)
+
+| 노드 타입 | X 좌표 | 배치 |
+|----------|--------|------|
+| Agent | 90 | 좌측 열 |
+| Provider | 360 | 중앙 열 |
+| Skill | 680 | 우측 열 |
+| 수직 간격 | 46px | Agent 간 |
+
+팀 Apply 성공 → 500ms 지연 → `autoLayoutSignal` 증가 → `applyTidyLayout` 자동 실행 → 노드 위치 저장
+
+---
+
+### 6.7 2차 개정 체크리스트
+
+#### 컴포넌트 변경
+- [ ] `TeamPanel.tsx` — `+ Skill` 버튼 추가 (onCreateSkill prop 포함)
+- [ ] `RightPanel.tsx` — `newSkill` 섹션 전체 제거
+- [ ] `AgentCreationModal.tsx` — Backend, Model 선택 필드 추가
+- [ ] `ChatInput.tsx` — model input → select 전환, orchestratorLocked prop
+
+#### 레이아웃 변경
+- [ ] `styles.css` — `canvas-controls` bottom 값 조정 (90px 이상)
+- [ ] `styles.css` — `build-prompt-bar` bottom 값 조정 (16px)
+- [ ] `GraphView.tsx` — `autoLayoutSignal` prop 처리 useEffect 추가
+
+#### 신규 파일
+- [ ] `webview-ui/src/utils/modelOptions.ts` — backend별 모델 목록 상수

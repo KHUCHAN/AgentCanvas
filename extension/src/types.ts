@@ -20,12 +20,33 @@ export type CliBackendId =
   | "aider"
   | "custom";
 
+export type PromptMode = "append" | "replace";
+export type ClaudePermissionMode = "default" | "plan" | "skip";
+export type CodexApprovalPolicy = "on-request" | "untrusted" | "never";
+export type CodexSandboxPolicy = "read-only" | "workspace-write" | "danger-full-access";
+export type GeminiApprovalMode = "default" | "auto_edit" | "yolo";
+
 export type AgentRuntime =
   | {
       kind: "cli";
       backendId: CliBackendId;
       cwdMode?: "workspace" | "agentHome";
       modelId?: string;
+      promptMode?: PromptMode;
+      maxTurns?: number;
+      maxBudgetUsd?: number;
+      permissionMode?: ClaudePermissionMode;
+      allowedTools?: string[];
+      codexApproval?: CodexApprovalPolicy;
+      codexSandbox?: CodexSandboxPolicy;
+      geminiApprovalMode?: GeminiApprovalMode;
+      geminiUseSandbox?: boolean;
+      additionalDirs?: string[];
+      enableWebSearch?: boolean;
+      sessionId?: string;
+      sessionName?: string;
+      useWorktree?: boolean;
+      worktreeName?: string;
     }
   | {
       kind: "openclaw";
@@ -253,6 +274,38 @@ export interface BackendCapabilityProfile {
     codeExecution: boolean;
     sessionResume: boolean;
   };
+}
+
+export interface BackendModelOption {
+  id: string;
+  label: string;
+  tier?: "fast" | "standard" | "advanced" | "experimental";
+}
+
+export interface BackendModelCatalog {
+  backendId: CanonicalBackendId;
+  models: BackendModelOption[];
+  fetchedAt: number;
+  source: "dynamic" | "fallback";
+}
+
+export interface ClaudeQuotaSnapshot {
+  sessionUsedPct: number;
+  weekAllUsedPct: number;
+  weekSonnetUsedPct: number;
+  sessionResetsAt?: string;
+  weekResetsAt?: string;
+  fetchedAt: number;
+  source: "dynamic" | "fallback";
+}
+
+export interface CliSubscriptionQuota {
+  sessionUsedPct: number;
+  weekAllUsedPct: number;
+  sessionResetsAt?: string;
+  weekResetsAt?: string;
+  fetchedAt: number;
+  source: "dynamic" | "fallback";
 }
 
 export interface GeneratedAgent {

@@ -1,12 +1,20 @@
 import { useState } from "react";
-import type { ChatMode, CliBackend } from "../messaging/protocol";
+import type {
+  BackendModelCatalog,
+  ChatMode,
+  CliBackend
+} from "../messaging/protocol";
+import { getModelOptionsForBackend } from "../utils/modelOptions";
 
 type ChatInputProps = {
   mode: ChatMode;
   backendId: Exclude<CliBackend["id"], "auto">;
   modelId?: string;
   backends: CliBackend[];
+  modelCatalogs?: BackendModelCatalog[];
   disabled?: boolean;
+  backendLocked?: boolean;
+  backendLockReason?: string;
   onModeChange: (mode: ChatMode) => void;
   onBackendChange: (backendId: Exclude<CliBackend["id"], "auto">) => void;
   onModelChange: (modelId: string) => void;
@@ -26,6 +34,8 @@ export default function ChatInput(props: ChatInputProps) {
   };
 
   const backendOptions = props.backends.filter((backend) => backend.id !== "auto" && backend.available);
+  const modelOptions = getModelOptionsForBackend(props.backendId, props.modelCatalogs);
+  const selectedModelId = props.modelId ?? "";
 
   return (
     <div className="chat-input-area">
@@ -33,7 +43,7 @@ export default function ChatInput(props: ChatInputProps) {
         className="chat-input-textarea"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder="Message the orchestrator..."
+        placeholder="❯ Message the orchestrator..."
         rows={3}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
@@ -57,7 +67,7 @@ export default function ChatInput(props: ChatInputProps) {
           className="chat-backend-select"
           value={props.backendId}
           onChange={(event) => props.onBackendChange(event.target.value as Exclude<CliBackend["id"], "auto">)}
-          disabled={props.disabled}
+          disabled={props.disabled || props.backendLocked}
         >
           {backendOptions.map((backend) => (
             <option key={backend.id} value={backend.id}>
@@ -65,16 +75,30 @@ export default function ChatInput(props: ChatInputProps) {
             </option>
           ))}
         </select>
-        <input
-          value={props.modelId ?? ""}
+        <select
+          className="chat-model-select"
+          value={selectedModelId}
           onChange={(event) => props.onModelChange(event.target.value)}
-          placeholder="model (optional)"
           disabled={props.disabled}
-        />
+        >
+          <option value="">Backend default</option>
+          {selectedModelId &&
+            !modelOptions.some((option) => option.id === selectedModelId) && (
+              <option value={selectedModelId}>{selectedModelId} (custom)</option>
+            )}
+          {modelOptions.map((option) => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </select>
         <button type="button" className="chat-send-button" onClick={() => void send()} disabled={props.disabled}>
           Send
         </button>
       </div>
+      {props.backendLocked && (
+        <div className="chat-input-lock-hint">
+          {props.backendLockReason || "Backend is locked to orchestrator runtime."}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,16 +2,22 @@ import type {
   AgentRuntime,
   AgentRole,
   BackendBudget,
+  BackendModelCatalog,
   BackendUsageSummary,
   ChatMessage,
   ChatMode,
   CanonicalBackendId,
+  ClaudePermissionMode,
+  ClaudeQuotaSnapshot, CliSubscriptionQuota,
   ContextPacket,
   CacheConfig,
   CacheMetrics,
   CliBackend,
   CliBackendId,
   CliBackendOverrides,
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
+  GeminiApprovalMode,
   DiscoverySnapshot,
   EventProvenance,
   GeneratedAgentStructure,
@@ -115,6 +121,21 @@ export type WebviewToExtensionMessage =
         description?: string;
         systemPrompt?: string;
         isOrchestrator?: boolean;
+        backendId?: CanonicalBackendId;
+        modelId?: string;
+        promptMode?: "append" | "replace";
+        maxTurns?: number;
+        maxBudgetUsd?: number;
+        permissionMode?: ClaudePermissionMode;
+        allowedTools?: string[];
+        codexApproval?: CodexApprovalPolicy;
+        codexSandbox?: CodexSandboxPolicy;
+        geminiApprovalMode?: GeminiApprovalMode;
+        geminiUseSandbox?: boolean;
+        additionalDirs?: string[];
+        enableWebSearch?: boolean;
+        sessionId?: string;
+        sessionName?: string;
       }
     >
   | RequestMessage<"DELETE_AGENT", { agentId: string }>
@@ -259,6 +280,8 @@ export type ExtensionToWebviewMessage =
     }
   | { type: "IMPORT_PREVIEW"; payload: { preview: SkillPackPreview } }
   | { type: "CLI_BACKENDS"; payload: { backends: CliBackend[] } }
+  | { type: "BACKEND_MODELS_UPDATE"; payload: { catalogs: BackendModelCatalog[] } }
+  | { type: "BACKEND_QUOTA_UPDATE"; payload: { claude?: ClaudeQuotaSnapshot; codex?: CliSubscriptionQuota; gemini?: CliSubscriptionQuota } }
   | { type: "COLLAB_EVENT"; payload: {
       event: "task_dispatched" | "proposal_submitted" | "proposal_reviewed" | "announce";
       runId: string;

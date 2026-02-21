@@ -144,55 +144,23 @@ function isValidExtensionMessage(value: unknown): value is ExtensionToWebviewMes
     return false;
   }
   const message = value as Record<string, unknown>;
-  if (typeof message.type !== "string") {
+  const type = message.type;
+  if (typeof type !== "string") {
     return false;
   }
 
-  switch (message.type) {
-    case "INIT_STATE":
-      return hasObjectPayload(message, "payload") && isObject(message.payload.snapshot);
-    case "STATE_PATCH":
-      return hasObjectPayload(message, "payload");
-    case "IMPORT_PREVIEW":
-      return hasObjectPayload(message, "payload") && isObject(message.payload.preview);
-    case "CLI_BACKENDS":
-      return hasObjectPayload(message, "payload") && Array.isArray(message.payload.backends);
-    case "PROMPT_HISTORY":
-      return hasObjectPayload(message, "payload") && Array.isArray(message.payload.items);
-    case "SCHEDULE_EVENT":
-      return hasObjectPayload(message, "payload") && isObject(message.payload.event);
-    case "GENERATION_PROGRESS":
-      return (
-        hasObjectPayload(message, "payload") &&
-        typeof message.payload.stage === "string" &&
-        typeof message.payload.message === "string"
-      );
-    case "TOAST":
-      return (
-        hasObjectPayload(message, "payload") &&
-        typeof message.payload.level === "string" &&
-        typeof message.payload.message === "string"
-      );
-    case "ERROR":
-      return hasObjectPayload(message, "payload") && typeof message.payload.message === "string";
-    case "RESPONSE_OK":
-      return typeof message.inReplyTo === "string";
-    case "RESPONSE_ERROR":
-      return (
-        typeof message.inReplyTo === "string" &&
-        isObject(message.error) &&
-        typeof message.error.message === "string"
-      );
-    default:
-      return false;
+  if (type === "RESPONSE_OK") {
+    return typeof message.inReplyTo === "string";
   }
-}
-
-function hasObjectPayload<T extends string>(
-  message: Record<string, unknown>,
-  key: T
-): message is Record<string, unknown> & { [K in T]: Record<string, unknown> } {
-  return isObject(message[key]);
+  if (type === "RESPONSE_ERROR") {
+    return (
+      typeof message.inReplyTo === "string" &&
+      isObject(message.error) &&
+      typeof message.error.message === "string"
+    );
+  }
+  // Pass through all non-response extension events so new event types do not get dropped.
+  return true;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

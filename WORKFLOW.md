@@ -59,6 +59,61 @@
 
 ---
 
+### 1.6 Skill과 Task의 실행 흐름 (2026-02-20 추가)
+
+> 용어 정의는 FRAMEWORK.md §0 "핵심 용어 정의" 참조
+
+AgentCanvas에서 사용자의 작업 요청이 실행되는 전체 흐름:
+
+```
+[STEP 1] 설계 단계 (정적)
+──────────────────────────────────────
+  Build Team Prompt → Agent[] 생성
+  각 Agent에 Skill[] 할당 (assignedSkillIds)
+  각 Agent에 MCP Server[] 연결 (assignedMcpServerIds)
+
+[STEP 2] 작업 지시 단계
+──────────────────────────────────────
+  사용자 → Task 탭에서 Work Prompt 작성
+  "이 PR을 리뷰하고 테스트도 작성해줘"
+  [▶ Submit Work] 클릭
+
+[STEP 3] 분해 단계 (Orchestrator)
+──────────────────────────────────────
+  Orchestrator가 Work Prompt를 분석
+  → Task[] 자동 생성 (각 Task에 agentId, deps, priority 할당)
+
+  예: Task-1: "PR 코드 리뷰" → Reviewer Agent
+      Task-2: "단위 테스트 작성" → Tester Agent (deps: [Task-1])
+      Task-3: "결과 종합 보고" → Orchestrator (deps: [Task-1, Task-2])
+
+[STEP 4] 실행 단계 (Worker)
+──────────────────────────────────────
+  각 Worker Agent가 할당된 Task를 실행
+  실행 시 자신이 보유한 Skill을 자동 활용:
+    - Skill의 description이 Task 내용과 매칭되면
+    - SKILL.md 본문(지침)을 로드하여 따름
+    - 필요 시 scripts/ 실행, references/ 참조
+
+  예: Reviewer Agent가 "PR 코드 리뷰" Task 실행 시
+      → 보유 Skill "code-review"의 SKILL.md 지침을 따름
+      → GitHub MCP로 PR diff 조회
+      → 리뷰 결과 생성
+
+[STEP 5] 추적 단계 (UI)
+──────────────────────────────────────
+  칸반 보드: Task 카드가 To Do → In Progress → Done 이동
+  캔버스: Agent 노드에 실시간 상태 표시 (working/done/error)
+  Schedule: 간트 차트 타임라인에 Task 진행 표시
+```
+
+**핵심 구분:**
+- **Skill은 실행되지 않는다** — Skill은 Agent가 Task를 수행할 때 **참조하는 지침**
+- **Task가 실행된다** — Task는 구체적 작업 지시이며, Agent가 Skill을 활용하여 수행
+- **사용자는 Work Prompt를 제출한다** — "Run Task"가 아니라 **"Submit Work"**
+
+---
+
 ## 2. Prompt-to-Agents System (자동 에이전트 구조 생성)
 
 사용자가 자연어 Prompt를 입력하면 연결된 AI CLI(Claude Code, Gemini CLI, Codex)를 통해 Agent 팀 구조를 자동으로 생성합니다.

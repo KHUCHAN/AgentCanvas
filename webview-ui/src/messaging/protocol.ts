@@ -15,12 +15,33 @@ export type CliBackendId =
   | "aider"
   | "custom";
 
+export type PromptMode = "append" | "replace";
+export type ClaudePermissionMode = "default" | "plan" | "skip";
+export type CodexApprovalPolicy = "on-request" | "untrusted" | "never";
+export type CodexSandboxPolicy = "read-only" | "workspace-write" | "danger-full-access";
+export type GeminiApprovalMode = "default" | "auto_edit" | "yolo";
+
 export type AgentRuntime =
   | {
       kind: "cli";
       backendId: CliBackendId;
       cwdMode?: "workspace" | "agentHome";
       modelId?: string;
+      promptMode?: PromptMode;
+      maxTurns?: number;
+      maxBudgetUsd?: number;
+      permissionMode?: ClaudePermissionMode;
+      allowedTools?: string[];
+      codexApproval?: CodexApprovalPolicy;
+      codexSandbox?: CodexSandboxPolicy;
+      geminiApprovalMode?: GeminiApprovalMode;
+      geminiUseSandbox?: boolean;
+      additionalDirs?: string[];
+      enableWebSearch?: boolean;
+      sessionId?: string;
+      sessionName?: string;
+      useWorktree?: boolean;
+      worktreeName?: string;
     }
   | {
       kind: "openclaw";
@@ -49,6 +70,37 @@ export type CliBackendOverride = {
 
 export type CliBackendOverrides = Partial<Record<Exclude<CliBackendId, "auto">, CliBackendOverride>>;
 export type CanonicalBackendId = "claude" | "codex" | "gemini" | "aider" | "custom";
+export type BackendModelOption = {
+  id: string;
+  label: string;
+  tier?: "fast" | "standard" | "advanced" | "experimental";
+};
+
+export type BackendModelCatalog = {
+  backendId: CanonicalBackendId;
+  models: BackendModelOption[];
+  fetchedAt: number;
+  source: "dynamic" | "fallback";
+};
+
+export type ClaudeQuotaSnapshot = {
+  sessionUsedPct: number;
+  weekAllUsedPct: number;
+  weekSonnetUsedPct: number;
+  sessionResetsAt?: string;
+  weekResetsAt?: string;
+  fetchedAt: number;
+  source: "dynamic" | "fallback";
+};
+
+export type CliSubscriptionQuota = {
+  sessionUsedPct: number;
+  weekAllUsedPct: number;
+  sessionResetsAt?: string;
+  weekResetsAt?: string;
+  fetchedAt: number;
+  source: "dynamic" | "fallback";
+};
 
 export type AgentRole =
   | "orchestrator"
@@ -766,6 +818,21 @@ export type WebviewToExtensionMessage =
         description?: string;
         systemPrompt?: string;
         isOrchestrator?: boolean;
+        backendId?: CanonicalBackendId;
+        modelId?: string;
+        promptMode?: PromptMode;
+        maxTurns?: number;
+        maxBudgetUsd?: number;
+        permissionMode?: ClaudePermissionMode;
+        allowedTools?: string[];
+        codexApproval?: CodexApprovalPolicy;
+        codexSandbox?: CodexSandboxPolicy;
+        geminiApprovalMode?: GeminiApprovalMode;
+        geminiUseSandbox?: boolean;
+        additionalDirs?: string[];
+        enableWebSearch?: boolean;
+        sessionId?: string;
+        sessionName?: string;
       }
     >
   | RequestMessage<"DELETE_AGENT", { agentId: string }>
@@ -910,6 +977,8 @@ export type ExtensionToWebviewMessage =
     }
   | { type: "IMPORT_PREVIEW"; payload: { preview: SkillPackPreview } }
   | { type: "CLI_BACKENDS"; payload: { backends: CliBackend[] } }
+  | { type: "BACKEND_MODELS_UPDATE"; payload: { catalogs: BackendModelCatalog[] } }
+  | { type: "BACKEND_QUOTA_UPDATE"; payload: { claude?: ClaudeQuotaSnapshot; codex?: CliSubscriptionQuota; gemini?: CliSubscriptionQuota } }
   | { type: "COLLAB_EVENT"; payload: {
       event: "task_dispatched" | "proposal_submitted" | "proposal_reviewed" | "announce";
       runId: string;

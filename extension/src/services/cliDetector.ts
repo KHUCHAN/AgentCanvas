@@ -31,22 +31,22 @@ const DEFAULT_BACKENDS: Array<
     id: "claude",
     displayName: "Claude Code",
     command: "claude",
-    args: ["--print"],
-    stdinPrompt: true
+    args: [],
+    stdinPrompt: false
   },
   {
     id: "gemini",
     displayName: "Gemini CLI",
     command: "gemini",
     args: [],
-    stdinPrompt: true
+    stdinPrompt: false
   },
   {
     id: "codex",
     displayName: "Codex CLI",
     command: "codex",
-    args: ["exec", "-"],
-    stdinPrompt: true
+    args: [],
+    stdinPrompt: false
   },
   {
     id: "aider",

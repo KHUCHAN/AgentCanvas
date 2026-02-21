@@ -1,7 +1,17 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import type { AgentProfile, AgentRole, AgentRuntime, CliBackendId } from "../types";
+import type {
+  AgentProfile,
+  AgentRole,
+  AgentRuntime,
+  ClaudePermissionMode,
+  GeminiApprovalMode,
+  CliBackendId,
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
+  PromptMode
+} from "../types";
 import { sanitizeFileName } from "./pathUtils";
 
 const AGENT_PROFILES_DIR = join(".agentcanvas", "agents");
@@ -13,6 +23,21 @@ type CreateAgentInput = {
   description?: string;
   systemPrompt?: string;
   isOrchestrator?: boolean;
+  backendId?: CliBackendId;
+  modelId?: string;
+  promptMode?: PromptMode;
+  maxTurns?: number;
+  maxBudgetUsd?: number;
+  permissionMode?: ClaudePermissionMode;
+  allowedTools?: string[];
+  codexApproval?: CodexApprovalPolicy;
+  codexSandbox?: CodexSandboxPolicy;
+  geminiApprovalMode?: GeminiApprovalMode;
+  geminiUseSandbox?: boolean;
+  additionalDirs?: string[];
+  enableWebSearch?: boolean;
+  sessionId?: string;
+  sessionName?: string;
   workspaceRoot: string;
   homeDir: string;
 };
@@ -41,7 +66,22 @@ const runtimeSchema = z.union([
     kind: z.literal("cli"),
     backendId: cliBackendIdSchema,
     cwdMode: z.enum(["workspace", "agentHome"]).optional(),
-    modelId: z.string().optional()
+    modelId: z.string().optional(),
+    promptMode: z.enum(["append", "replace"]).optional(),
+    maxTurns: z.number().int().positive().optional(),
+    maxBudgetUsd: z.number().positive().optional(),
+    permissionMode: z.enum(["default", "plan", "skip"]).optional(),
+    allowedTools: z.array(z.string()).optional(),
+    codexApproval: z.enum(["on-request", "untrusted", "never"]).optional(),
+    codexSandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
+    geminiApprovalMode: z.enum(["default", "auto_edit", "yolo"]).optional(),
+    geminiUseSandbox: z.boolean().optional(),
+    additionalDirs: z.array(z.string()).optional(),
+    enableWebSearch: z.boolean().optional(),
+    sessionId: z.string().optional(),
+    sessionName: z.string().optional(),
+    useWorktree: z.boolean().optional(),
+    worktreeName: z.string().optional()
   }),
   z.object({
     kind: z.literal("openclaw"),
@@ -175,6 +215,21 @@ export async function createCustomAgentProfile(input: CreateAgentInput): Promise
   const baseId = slugify(input.name);
   const role = input.role;
   const isOrchestrator = input.isOrchestrator ?? role === "orchestrator";
+  const backendId = input.backendId ?? "auto";
+  const modelId = input.modelId?.trim() || undefined;
+  const promptMode = input.promptMode;
+  const maxTurns =
+    Number.isFinite(input.maxTurns) && (input.maxTurns ?? 0) > 0
+      ? Math.round(input.maxTurns as number)
+      : undefined;
+  const maxBudgetUsd =
+    Number.isFinite(input.maxBudgetUsd) && (input.maxBudgetUsd ?? 0) > 0
+      ? Number(input.maxBudgetUsd)
+      : undefined;
+  const allowedTools = (input.allowedTools ?? []).map((item) => item.trim()).filter(Boolean);
+  const additionalDirs = (input.additionalDirs ?? []).map((item) => item.trim()).filter(Boolean);
+  const sessionId = input.sessionId?.trim() || undefined;
+  const sessionName = input.sessionName?.trim() || undefined;
   const profile: AgentProfile = {
     id: `custom:${baseId}`,
     name: input.name.trim(),
@@ -191,9 +246,24 @@ export async function createCustomAgentProfile(input: CreateAgentInput): Promise
     assignedMcpServerIds: [],
     runtime: {
       kind: "cli",
-      backendId: "auto",
-      cwdMode: isOrchestrator ? "workspace" : "agentHome"
+      backendId,
+      cwdMode: isOrchestrator ? "workspace" : "agentHome",
+      modelId,
+      promptMode,
+      maxTurns,
+      maxBudgetUsd,
+      permissionMode: input.permissionMode,
+      allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+      codexApproval: input.codexApproval,
+      codexSandbox: input.codexSandbox,
+      geminiApprovalMode: input.geminiApprovalMode,
+      geminiUseSandbox: input.geminiUseSandbox === true ? true : undefined,
+      additionalDirs: additionalDirs.length > 0 ? additionalDirs : undefined,
+      enableWebSearch: input.enableWebSearch === true ? true : undefined,
+      sessionId,
+      sessionName
     },
+    preferredModel: modelId,
     avatar: isOrchestrator ? "🎯" : undefined
   };
   await saveAgentProfile(input.workspaceRoot, profile);

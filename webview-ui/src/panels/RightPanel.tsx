@@ -1,6 +1,7 @@
-import { type DragEvent as ReactDragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Edge, Node } from "reactflow";
 import type {
+  BackendModelCatalog,
   ChatMessage,
   ChatMode,
   CliBackend,
@@ -32,16 +33,15 @@ type RightPanelProps = {
   onModeChange: (mode: "library" | "inspector" | "task" | "run" | "chat") => void;
   onOpenFile: (path: string) => void;
   onRevealPath: (path: string) => void;
-  onCreateSkill: (name: string, description: string) => void;
   onExportSkills: (skillIds: string[]) => void;
   onValidateSkill: (skillId: string) => void;
   onCreateOverride: (path: string) => void;
   onSaveSkillFrontmatter: (
     skillId: string,
     name: string,
-      description: string,
-      extraFrontmatter: Record<string, unknown>
-    ) => void;
+    description: string,
+    extraFrontmatter: Record<string, unknown>
+  ) => void;
   interactionPatterns: PatternIndexItem[];
   onInsertPattern: (patternId: string) => Promise<void>;
   onUpdateInteractionEdge: (edgeId: string, update: { label?: string; data?: Record<string, unknown> }) => void;
@@ -93,7 +93,10 @@ type RightPanelProps = {
   chatMode: ChatMode;
   chatBackendId: Exclude<CliBackend["id"], "auto">;
   chatModelId?: string;
+  chatModelCatalogs?: BackendModelCatalog[];
   chatSending?: boolean;
+  chatBackendLocked?: boolean;
+  chatBackendLockReason?: string;
   onChatModeChange: (mode: ChatMode) => void;
   onChatBackendChange: (backendId: Exclude<CliBackend["id"], "auto">) => void;
   onChatModelChange: (modelId: string) => void;
@@ -106,15 +109,12 @@ type RightPanelProps = {
 };
 
 type LibraryFilter = "all" | "skills" | "rules" | "agents";
-type LibrarySectionKey = "skills" | "agents" | "patterns" | "mcp" | "rules" | "newSkill";
+type LibrarySectionKey = "skills" | "agents" | "patterns" | "mcp" | "rules";
 
 export default function RightPanel(props: RightPanelProps) {
-  const normalizedMode: "library" | "chat" = props.mode === "library" ? "library" : "chat";
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebouncedValue(query, 120);
   const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>("all");
-  const [skillName, setSkillName] = useState("");
-  const [skillDescription, setSkillDescription] = useState("");
   const [inspectorTab, setInspectorTab] = useState<"overview" | "variables">("overview");
   const [agentInspectorTab, setAgentInspectorTab] = useState<"overview" | "skills" | "rules" | "mcp">("overview");
   const [skillRenderLimit, setSkillRenderLimit] = useState(160);
@@ -127,17 +127,9 @@ export default function RightPanel(props: RightPanelProps) {
     agents: false,
     patterns: false,
     mcp: false,
-    rules: false,
-    newSkill: false
+    rules: false
   });
   const previousSelectedTypeRef = useRef<string>();
-
-  useEffect(() => {
-    if (props.mode !== "inspector") {
-      return;
-    }
-    setInspectorTab("overview");
-  }, [props.mode]);
 
   useEffect(() => {
     window.requestAnimationFrame(() => {
@@ -305,47 +297,34 @@ export default function RightPanel(props: RightPanelProps) {
   if (!props.open) {
     return null;
   }
-
-  const handleCreateSkill = (event: FormEvent) => {
-    event.preventDefault();
-    if (!skillName.trim()) {
-      return;
-    }
-    props.onCreateSkill(skillName.trim(), skillDescription.trim());
-    setSkillName("");
-    setSkillDescription("");
-  };
+  const visibleMode: RightPanelProps["mode"] = props.mode === "chat" ? "chat" : "library";
 
   return (
     <aside className="right-panel">
       <div className="right-panel-tabs" role="tablist" aria-label="Right panel tabs">
         <button
           role="tab"
-          aria-selected={normalizedMode === "library"}
+          aria-selected={visibleMode === "library"}
           aria-controls="right-panel-library"
-          className={normalizedMode === "library" ? "active" : ""}
+          className={visibleMode === "library" ? "active" : ""}
           onClick={() => props.onModeChange("library")}
         >
           Node Library
         </button>
         <button
           role="tab"
-          aria-selected={normalizedMode === "chat"}
+          aria-selected={visibleMode === "chat"}
           aria-controls="right-panel-chat"
-          className={normalizedMode === "chat" ? "active" : ""}
+          className={visibleMode === "chat" ? "active" : ""}
           onClick={() => props.onModeChange("chat")}
         >
-          Chat
+          AI Prompt
         </button>
       </div>
 
-      {normalizedMode === "chat" && (
-        <div className="panel-mode-subtitle">
-          Chat with the orchestrator to plan, run, and monitor work.
-        </div>
-      )}
+      <div className="panel-mode-subtitle">{subtitleForPanelMode(visibleMode)}</div>
 
-      {normalizedMode === "library" && (
+      {visibleMode === "library" && (
         <div className="panel-content" id="right-panel-library" role="tabpanel">
           <div role="search">
             <input
@@ -617,39 +596,10 @@ export default function RightPanel(props: RightPanelProps) {
             </div>
           )}
 
-          {(libraryFilter === "all" || libraryFilter === "skills") && (
-            <form className="new-skill-form" onSubmit={handleCreateSkill}>
-              <button
-                type="button"
-                className="library-section-header"
-                onClick={() => toggleLibrarySection("newSkill")}
-              >
-                <span className="library-title">New Skill</span>
-                <span className="library-section-meta">Create</span>
-                <span className="library-section-caret">{collapsedSections.newSkill ? "+" : "-"}</span>
-              </button>
-              {!collapsedSections.newSkill && (
-                <>
-                  <input
-                    value={skillName}
-                    onChange={(event) => setSkillName(event.target.value)}
-                    placeholder="name (kebab-case)"
-                  />
-                  <textarea
-                    value={skillDescription}
-                    onChange={(event) => setSkillDescription(event.target.value)}
-                    placeholder="description"
-                    rows={3}
-                  />
-                  <button type="submit">Create</button>
-                </>
-              )}
-            </form>
-          )}
         </div>
       )}
 
-      {normalizedMode === "chat" && (
+      {visibleMode === "chat" && (
         <div className="panel-content" id="right-panel-chat" role="tabpanel">
           <ChatPanel
             hasTeam={(props.snapshot?.agents.length ?? 0) > 0}
@@ -658,7 +608,10 @@ export default function RightPanel(props: RightPanelProps) {
             backendId={props.chatBackendId}
             modelId={props.chatModelId}
             backends={props.runBackends}
+            modelCatalogs={props.chatModelCatalogs}
             sending={props.chatSending}
+            backendLocked={props.chatBackendLocked}
+            backendLockReason={props.chatBackendLockReason}
             onModeChange={props.onChatModeChange}
             onBackendChange={props.onChatBackendChange}
             onModelChange={props.onChatModelChange}
@@ -902,6 +855,22 @@ export default function RightPanel(props: RightPanelProps) {
       )}
     </aside>
   );
+}
+
+function subtitleForPanelMode(mode: RightPanelProps["mode"]): string {
+  if (mode === "library") {
+    return "Browse and insert skills, rules, agents, and patterns.";
+  }
+  if (mode === "inspector") {
+    return "Inspect selected nodes and edges, then edit metadata.";
+  }
+  if (mode === "task") {
+    return "Work instructions and task tracking.";
+  }
+  if (mode === "run") {
+    return "Execution sessions and runtime logs.";
+  }
+  return "Chat with the orchestrator to plan, run, and monitor work.";
 }
 
 function LibrarySkillItem(props: {

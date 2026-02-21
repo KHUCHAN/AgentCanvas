@@ -111,7 +111,7 @@
 │  └──────────┘ └──────────┘ └────┘│  ┌────────────────────┐  │
 │                                   │  │ "이 PR 리뷰해줘"    │  │
 │                                   │  └────────────────────┘  │
-│                                   │  [▶ Run Task]            │
+│                                   │  [▶ Submit Work]            │
 │                                   │  ────────────────────    │
 │                                   │  HISTORY                 │
 │                                   │  · PR #42 — 완료 (3m)   │
@@ -212,7 +212,7 @@
 | New Agent | 가운데 Build Prompt (주요) / Team Panel [+ Agent] (수동) | 1클릭 |
 | Save / Load Flow | `Ctrl+S` / `Ctrl+O` 또는 ⌘K | 키보드 |
 | Refresh | `R` 키 | 키보드 |
-| Run | Team Panel [▶ Run Task] | 1클릭 |
+| Run | Team Panel [▶ Submit Work] | 1클릭 |
 | Graph / Schedule | 헤더 뷰 토글 | 1클릭 |
 | Export / Import | ⚙ Settings → Packs | 2클릭 |
 | Validate | 자동 + ⌘K | 0~2클릭 |
@@ -255,7 +255,7 @@
 │  ────────────────────────────  │
 │  [Work 섹션]                    │
 │  작업 프롬프트 입력               │
-│  [▶ Run Task]                  │
+│  [▶ Submit Work]                  │
 │                                 │
 │  ────────────────────────────  │
 │  [History 섹션]                 │
@@ -269,12 +269,12 @@
 | 섹션 | 내용 |
 |------|------|
 | **MY TEAM** | 빌드된 에이전트 카드. 역할 아이콘 + 이름 + 프로바이더 + Skills/MCP 수 + [Edit]. [+ Agent]로 수동 추가, [Rebuild]로 프롬프트 재빌드 |
-| **WORK** | 작업 프롬프트 입력 + [▶ Run Task]. 실행 시 태스크가 자동 분해되어 칸반 카드로 생성 |
+| **WORK** | 작업 프롬프트 입력 + [▶ Submit Work]. 실행 시 태스크가 자동 분해되어 칸반 카드로 생성 |
 | **HISTORY** | 실행 기록. 클릭하면 해당 Run의 칸반 상태 표시 |
 
 **[Edit] 클릭 시:** 기존 `AgentDetailModal` (역할, 스킬, MCP, 시스템 프롬프트 수정)
 
-**[▶ Run Task] 동작:**
+**[▶ Submit Work] 동작:**
 1. 작업 프롬프트를 Orchestrator에게 전달
 2. Orchestrator가 태스크 분해 → Task[] 생성
 3. 각 Task가 칸반 카드로 To Do 컬럼에 추가
@@ -498,7 +498,7 @@ function getColumn(status: Task["status"]): KanbanColumn["id"] {
            ├── [Graph] 탭 ──→ ReactFlow 캔버스 (파워 유저)
            ├── [Schedule] 탭 ──→ 간트 차트 타임라인
            │
-           ├── 작업 프롬프트 [▶ Run Task] ──→ 칸반 카드 자동 생성 + 실행
+           ├── 작업 프롬프트 [▶ Submit Work] ──→ 칸반 카드 자동 생성 + 실행
            │
            └── [▶ Build New] ──→ 초기 Build Prompt 화면
 ```
@@ -512,7 +512,7 @@ function getColumn(status: Task["status"]): KanbanColumn["id"] {
 | 기능 | 현재 | 새 위치 | 접근 |
 |------|------|---------|------|
 | Agent 팀 생성 | 툴바 New Agent | **가운데 Build Prompt** | 1클릭 |
-| 작업 실행 | 툴바 Run → 우측 패널 | **Team Panel [▶ Run Task]** | 1클릭 |
+| 작업 실행 | 툴바 Run → 우측 패널 | **Team Panel [▶ Submit Work]** | 1클릭 |
 | 진행 추적 | Schedule 뷰 (복잡) | **칸반 보드 (직관적)** | 자동 |
 | Agent 수정 | 노드 클릭 → Inspector | **Team Panel [Edit]** | 1클릭 |
 
@@ -569,7 +569,7 @@ function getColumn(status: Task["status"]): KanbanColumn["id"] {
 | 3-1 | `TeamPanel.tsx` (신규) | 에이전트 카드 리스트 + Work 프롬프트 + History |
 | 3-2 | `App.tsx` | team-ready 상태에서 2-column (Kanban + TeamPanel) |
 | 3-3 | `TeamPanel.tsx` | [Edit] → AgentDetailModal 연결 |
-| 3-4 | `TeamPanel.tsx` | [▶ Run Task] → `onRunFlow` 연결 + 칸반 업데이트 |
+| 3-4 | `TeamPanel.tsx` | [▶ Submit Work] → `onRunFlow` 연결 + 칸반 업데이트 |
 | 3-5 | `TeamPanel.tsx` | [+ Agent] → AgentCreationModal 연결 |
 | 3-6 | `TeamPanel.tsx` | [Rebuild] → Build Prompt 복귀 |
 
@@ -636,6 +636,76 @@ function getColumn(status: Task["status"]): KanbanColumn["id"] {
 3. **칸반이 결과물** — To Do / In Progress / Done, 누구나 이해하는 진행 추적
 4. **Graph/Schedule은 파워 유저 옵션** — 토글로 접근 가능, 기존 기능 100% 유지
 5. **나머지는 Settings + ⌘K** — 2클릭 이내 모든 기능 접근
+
+---
+
+### 10. UI 리뷰 지적사항 (2026-02-20 반영)
+
+> 실제 빌드된 UI 스크린샷 기반 리뷰 결과, 아래 7가지 개선사항이 도출되었습니다.
+
+#### REV-1. 스크롤 미구현
+- **현상:** Inspector, Library, Run History 등 오버플로우 가능 영역에 스크롤이 전혀 동작하지 않음
+- **원인:** `.panel-content`, `.inspector-block` 등에 `overflow: auto`가 있으나 부모에 `max-height` 또는 `flex` 기반 높이 제한 없음
+- **변경:** 오른쪽 패널 전체를 `display: flex; flex-direction: column; height: 100%` 구조로 리팩터, 각 콘텐츠 영역에 `flex: 1; overflow-y: auto; min-height: 0` 적용
+
+#### REV-2. AI Prompt 탭 제거 → 캔버스 하단 Build Prompt 상시 배치
+- **현상:** AI Prompt가 오른쪽 패널의 한 탭으로 존재하여 접근성이 낮고, 핵심 워크플로우(팀 빌드)가 숨겨져 있음
+- **변경:** 오른쪽 패널에서 "AI Prompt" 탭 **완전 삭제**. 대신 캔버스 영역 하단 가운데에 Build Team 프롬프트 입력 UI를 **항상** 표시 (팀 존재 여부 무관). 이미 팀이 있는 경우 축소된 형태(`[▶ Rebuild Team]` + 입력 필드)로 전환
+- **영향:** `RightPanel.tsx`의 `mode: "prompt"` 제거, `App.tsx` 또는 `GraphView.tsx`에 `<BuildPromptBar />` 오버레이 추가
+
+#### REV-3. 태스크 지시 탭 신규 추가
+- **현상:** Build Team 이후 에이전트 팀에 작업을 지시할 UI가 없음
+- **변경:** 오른쪽 패널에 **"Task"** 탭 신규 추가. 기존 "AI Prompt" 위치를 대체. 구성:
+  - 작업 프롬프트 입력 (textarea + `[▶ Submit Work]` 버튼)
+  - 실행 시 Orchestrator에게 전달 → Task[] 자동 분해 → 칸반 카드 생성
+  - 하단에 실행 히스토리 리스트 (기존 `RunPanel` 기능 흡수 가능)
+- **연결:** UX.md §4.3 Team Panel의 "WORK" 섹션 설계를 따름
+
+#### REV-4. Memory 탭 제거 → Orchestrator 자동 관리
+- **현상:** Memory 탭이 수동 CRUD UI로 존재하나, 일반 사용자가 직접 관리할 필요 없음
+- **변경:** 오른쪽 패널에서 "Memory" 탭 **완전 삭제**. Memory(context, learning, decisions)는 Orchestrator가 실행 중 자동으로 관리. 필요 시 Settings 모달 내 "Advanced → Memory" 서브 섹션으로 이동
+- **영향:** `MemoryPanel.tsx` 삭제 또는 SettingsModal 내부로 이동, `RightPanel.tsx`에서 `mode: "memory"` 제거
+
+#### REV-5. "+ Agent" 버튼 추가
+- **현상:** 툴바에 `[+]`(일반), `[+ Rule]`만 존재. Agent 수동 추가 경로 없음
+- **변경:** `[+ Rule]` 좌측에 **`[+ Agent]`** 버튼 추가. 클릭 시 에이전트 생성 팝업 (이름, 역할, 프로바이더 선택). 생성된 Agent가 캔버스에 새 노드로 배치됨
+- **영향:** 툴바 순서: `[+] [+ Agent] [+ Rule]`
+
+#### REV-6. Agent 더블클릭 → 관리 팝업
+- **현상:** Agent 노드 클릭 시 오른쪽 Inspector에 정보 표시되나, 스킬/MCP 관리는 별도 조작 필요
+- **변경:** Agent 노드 **더블클릭** 시 `AgentDetailModal` 즉시 열림. 모달에서 4개 탭(Overview / Skills / Rules / MCP)으로 에이전트 설정 전체 관리 가능. 싱글클릭은 기존처럼 Inspector에 요약 표시
+- **영향:** `GraphView.tsx`의 `onNodeDoubleClick` 이벤트에 `onOpenAgentDetail(agentId)` 연결
+
+#### REV-7. 캔버스 = 실시간 모니터링 화면
+- **현상:** Graph 뷰가 정적 구조도에 가까움. 실행 중 에이전트 상태 변화가 시각적으로 표현되지 않음
+- **변경:** 캔버스를 **실시간 모니터링 대시보드**로 전환:
+  - Agent 노드에 현재 상태 표시 (idle/thinking/working/error/done → 테두리 색 + 이펙트 SVG)
+  - 실행 중 엣지에 데이터 흐름 파티클 애니메이션 (EDGE-4 SVG 활용)
+  - Task 실행 중인 Agent 노드에 프로그레스 바 표시
+  - Orchestrator → Worker 위임 시 위임 엣지 하이라이트
+  - 완료된 Agent 노드에 체크마크 오버레이 (EFFECT-2 SVG)
+  - 에러 발생 시 Agent 노드 레드 펄스 (EFFECT-3 SVG)
+- **영향:** `AgentNode.tsx` 확장, `GraphView.tsx`에 TaskEvent 구독 + 노드 스타일 동적 업데이트
+
+---
+
+#### 변경 후 오른쪽 패널 탭 구성
+
+| 기존 | 변경 후 | 비고 |
+|------|---------|------|
+| Node Library | **Node Library** | 유지 |
+| Inspector | **Inspector** | 유지 + 스크롤 수정 |
+| AI Prompt | ~~삭제~~ | → 캔버스 하단 Build Prompt로 이동 |
+| Run | **Task** | 작업 지시 + 실행 기능 흡수 |
+| Memory | ~~삭제~~ | → Orchestrator 자동 / Settings 이동 |
+
+#### 변경 후 툴바 구성
+
+```
+[+] [+ Agent ★신규] [+ Rule]    [Node Library] [Inspector] [Task ★신규] [Run]
+```
+
+---
 
 **예상 총 작업일: 9~12일**
 

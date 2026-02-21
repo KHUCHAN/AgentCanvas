@@ -1,5 +1,14 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentRole, AgentRuntime, CliBackendId, DiscoverySnapshot } from "../messaging/protocol";
+import type {
+  AgentRole,
+  AgentRuntime,
+  CliBackendId,
+  ClaudePermissionMode,
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
+  DiscoverySnapshot,
+  PromptMode
+} from "../messaging/protocol";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
 type AgentDetailTab = "overview" | "skills" | "rules" | "mcp";
@@ -80,6 +89,19 @@ export default function AgentDetailModal({
   const [runtimeMode, setRuntimeMode] = useState<"default" | "cli" | "openclaw">("default");
   const [runtimeBackendId, setRuntimeBackendId] = useState<CliBackendId>("auto");
   const [runtimeCwdMode, setRuntimeCwdMode] = useState<"workspace" | "agentHome">("workspace");
+  const [runtimeModelId, setRuntimeModelId] = useState("");
+  const [runtimePromptMode, setRuntimePromptMode] = useState<PromptMode>("append");
+  const [runtimeMaxTurns, setRuntimeMaxTurns] = useState("");
+  const [runtimeMaxBudgetUsd, setRuntimeMaxBudgetUsd] = useState("");
+  const [runtimePermissionMode, setRuntimePermissionMode] = useState<ClaudePermissionMode>("default");
+  const [runtimeAllowedTools, setRuntimeAllowedTools] = useState("");
+  const [runtimeCodexApproval, setRuntimeCodexApproval] = useState<CodexApprovalPolicy>("on-request");
+  const [runtimeCodexSandbox, setRuntimeCodexSandbox] = useState<CodexSandboxPolicy>("workspace-write");
+  const [runtimeAdditionalDirs, setRuntimeAdditionalDirs] = useState("");
+  const [runtimeEnableWebSearch, setRuntimeEnableWebSearch] = useState(false);
+  const [runtimeSessionId, setRuntimeSessionId] = useState("");
+  const [runtimeSessionName, setRuntimeSessionName] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [openClawGateway, setOpenClawGateway] = useState("ws://127.0.0.1:18789");
   const [openClawAgentKey, setOpenClawAgentKey] = useState("");
 
@@ -143,6 +165,18 @@ export default function AgentDetailModal({
       setRuntimeMode("default");
       setRuntimeBackendId("auto");
       setRuntimeCwdMode(agentProfile.isOrchestrator ? "workspace" : "agentHome");
+      setRuntimeModelId("");
+      setRuntimePromptMode("append");
+      setRuntimeMaxTurns("");
+      setRuntimeMaxBudgetUsd("");
+      setRuntimePermissionMode("default");
+      setRuntimeAllowedTools("");
+      setRuntimeCodexApproval("on-request");
+      setRuntimeCodexSandbox("workspace-write");
+      setRuntimeAdditionalDirs("");
+      setRuntimeEnableWebSearch(false);
+      setRuntimeSessionId("");
+      setRuntimeSessionName("");
       setOpenClawGateway("ws://127.0.0.1:18789");
       setOpenClawAgentKey("");
     } else if (agentProfile.runtime.kind === "cli") {
@@ -151,6 +185,26 @@ export default function AgentDetailModal({
       setRuntimeCwdMode(
         agentProfile.runtime.cwdMode ?? (agentProfile.isOrchestrator ? "workspace" : "agentHome")
       );
+      setRuntimeModelId(agentProfile.runtime.modelId ?? "");
+      setRuntimePromptMode(agentProfile.runtime.promptMode ?? "append");
+      setRuntimeMaxTurns(
+        Number.isFinite(agentProfile.runtime.maxTurns)
+          ? String(agentProfile.runtime.maxTurns)
+          : ""
+      );
+      setRuntimeMaxBudgetUsd(
+        Number.isFinite(agentProfile.runtime.maxBudgetUsd)
+          ? String(agentProfile.runtime.maxBudgetUsd)
+          : ""
+      );
+      setRuntimePermissionMode(agentProfile.runtime.permissionMode ?? "default");
+      setRuntimeAllowedTools((agentProfile.runtime.allowedTools ?? []).join(", "));
+      setRuntimeCodexApproval(agentProfile.runtime.codexApproval ?? "on-request");
+      setRuntimeCodexSandbox(agentProfile.runtime.codexSandbox ?? "workspace-write");
+      setRuntimeAdditionalDirs((agentProfile.runtime.additionalDirs ?? []).join(", "));
+      setRuntimeEnableWebSearch(Boolean(agentProfile.runtime.enableWebSearch));
+      setRuntimeSessionId(agentProfile.runtime.sessionId ?? "");
+      setRuntimeSessionName(agentProfile.runtime.sessionName ?? "");
     } else {
       setRuntimeMode("openclaw");
       setOpenClawGateway(agentProfile.runtime.gatewayUrl ?? "ws://127.0.0.1:18789");
@@ -211,7 +265,19 @@ export default function AgentDetailModal({
       onSetRuntime(agentId, {
         kind: "cli",
         backendId: runtimeBackendId,
-        cwdMode: runtimeCwdMode
+        cwdMode: runtimeCwdMode,
+        modelId: runtimeModelId.trim() || undefined,
+        promptMode: runtimePromptMode,
+        maxTurns: parsePositiveInt(runtimeMaxTurns),
+        maxBudgetUsd: parsePositiveNumber(runtimeMaxBudgetUsd),
+        permissionMode: runtimePermissionMode,
+        allowedTools: splitListInput(runtimeAllowedTools),
+        codexApproval: runtimeCodexApproval,
+        codexSandbox: runtimeCodexSandbox,
+        additionalDirs: splitListInput(runtimeAdditionalDirs),
+        enableWebSearch: runtimeEnableWebSearch,
+        sessionId: runtimeSessionId.trim() || undefined,
+        sessionName: runtimeSessionName.trim() || undefined
       });
     } else {
       onSetRuntime(agentId, {
@@ -338,68 +404,204 @@ export default function AgentDetailModal({
                   <input value={color} onChange={(event) => setColor(event.target.value)} placeholder="#e8a64a" />
                 </div>
 
-                <div className="inspector-field">
-                  <label>Runtime</label>
-                  <select
-                    value={runtimeMode}
-                    onChange={(event) =>
-                      setRuntimeMode(event.target.value as "default" | "cli" | "openclaw")
+                <div
+                  className="accordion-toggle"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setShowAdvanced(!showAdvanced);
                     }
-                  >
-                    <option value="default">Workspace default</option>
-                    <option value="cli">CLI override</option>
-                    <option value="openclaw">OpenClaw</option>
-                  </select>
+                  }}
+                >
+                  <span>{showAdvanced ? "▼ Hide advanced runtime settings" : "▶ Show advanced runtime settings (CLI, Budget, Tools)"}</span>
                 </div>
 
-                {runtimeMode === "cli" && (
-                  <>
+                {showAdvanced && (
+                  <div className="advanced-settings-block">
                     <div className="inspector-field">
-                      <label>CLI backend</label>
+                      <label>Runtime</label>
                       <select
-                        value={runtimeBackendId}
-                        onChange={(event) => setRuntimeBackendId(event.target.value as CliBackendId)}
+                        value={runtimeMode}
+                        onChange={(event) =>
+                          setRuntimeMode(event.target.value as "default" | "cli" | "openclaw")
+                        }
                       >
-                        <option value="auto">auto</option>
-                        <option value="claude-code">claude-code</option>
-                        <option value="gemini-cli">gemini-cli</option>
-                        <option value="codex-cli">codex-cli</option>
-                        <option value="aider">aider</option>
-                        <option value="custom">custom</option>
+                        <option value="default">Workspace default</option>
+                        <option value="cli">CLI override</option>
+                        <option value="openclaw">OpenClaw</option>
                       </select>
                     </div>
-                    <div className="inspector-field">
-                      <label>CLI working directory</label>
-                      <select
-                        value={runtimeCwdMode}
-                        onChange={(event) => setRuntimeCwdMode(event.target.value as "workspace" | "agentHome")}
-                      >
-                        <option value="workspace">workspace root</option>
-                        <option value="agentHome">agent home (sandbox for worker runs)</option>
-                      </select>
-                    </div>
-                  </>
-                )}
 
-                {runtimeMode === "openclaw" && (
-                  <>
-                    <div className="inspector-field">
-                      <label>Gateway URL</label>
-                      <input
-                        value={openClawGateway}
-                        onChange={(event) => setOpenClawGateway(event.target.value)}
-                        placeholder="ws://127.0.0.1:18789"
-                      />
-                    </div>
-                    <div className="inspector-field">
-                      <label>Agent key (optional)</label>
-                      <input
-                        value={openClawAgentKey}
-                        onChange={(event) => setOpenClawAgentKey(event.target.value)}
-                        placeholder="agent key"
-                      />
-                    </div>
-                  </>
+                    {runtimeMode === "cli" && (
+                      <>
+                        <div className="inspector-field">
+                          <label>CLI backend</label>
+                          <select
+                            value={runtimeBackendId}
+                            onChange={(event) => setRuntimeBackendId(event.target.value as CliBackendId)}
+                          >
+                            <option value="auto">auto</option>
+                            <option value="claude-code">claude-code</option>
+                            <option value="gemini-cli">gemini-cli</option>
+                            <option value="codex-cli">codex-cli</option>
+                            <option value="aider">aider</option>
+                            <option value="custom">custom</option>
+                          </select>
+                        </div>
+                        <div className="inspector-field">
+                          <label>Model</label>
+                          <input
+                            value={runtimeModelId}
+                            onChange={(event) => setRuntimeModelId(event.target.value)}
+                            placeholder="backend default"
+                          />
+                        </div>
+                        <div className="inspector-field">
+                          <label>CLI working directory</label>
+                          <select
+                            value={runtimeCwdMode}
+                            onChange={(event) => setRuntimeCwdMode(event.target.value as "workspace" | "agentHome")}
+                          >
+                            <option value="workspace">workspace root</option>
+                            <option value="agentHome">agent home (sandbox for worker runs)</option>
+                          </select>
+                        </div>
+                        <div className="inspector-field">
+                          <label>Prompt mode</label>
+                          <select
+                            value={runtimePromptMode}
+                            onChange={(event) => setRuntimePromptMode(event.target.value as PromptMode)}
+                          >
+                            <option value="append">append</option>
+                            <option value="replace">replace</option>
+                          </select>
+                        </div>
+                        <div className="inspector-field">
+                          <label>Max turns</label>
+                          <input
+                            value={runtimeMaxTurns}
+                            onChange={(event) => setRuntimeMaxTurns(event.target.value)}
+                            placeholder="e.g. 8"
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <div className="inspector-field">
+                          <label>Max budget (USD)</label>
+                          <input
+                            value={runtimeMaxBudgetUsd}
+                            onChange={(event) => setRuntimeMaxBudgetUsd(event.target.value)}
+                            placeholder="e.g. 5.00"
+                            inputMode="decimal"
+                          />
+                        </div>
+                        <div className="inspector-field">
+                          <label>Permission mode</label>
+                          <select
+                            value={runtimePermissionMode}
+                            onChange={(event) =>
+                              setRuntimePermissionMode(event.target.value as ClaudePermissionMode)
+                            }
+                          >
+                            <option value="default">default</option>
+                            <option value="plan">plan</option>
+                            <option value="skip">skip permissions</option>
+                          </select>
+                        </div>
+                        <div className="inspector-field">
+                          <label>Allowed tools (comma/newline)</label>
+                          <textarea
+                            value={runtimeAllowedTools}
+                            onChange={(event) => setRuntimeAllowedTools(event.target.value)}
+                            rows={2}
+                            placeholder="Read, Glob, Grep"
+                          />
+                        </div>
+                        <div className="inspector-field">
+                          <label>Codex approval policy</label>
+                          <select
+                            value={runtimeCodexApproval}
+                            onChange={(event) =>
+                              setRuntimeCodexApproval(event.target.value as CodexApprovalPolicy)
+                            }
+                          >
+                            <option value="on-request">on-request</option>
+                            <option value="untrusted">untrusted</option>
+                            <option value="never">never</option>
+                          </select>
+                        </div>
+                        <div className="inspector-field">
+                          <label>Codex sandbox</label>
+                          <select
+                            value={runtimeCodexSandbox}
+                            onChange={(event) =>
+                              setRuntimeCodexSandbox(event.target.value as CodexSandboxPolicy)
+                            }
+                          >
+                            <option value="workspace-write">workspace-write</option>
+                            <option value="read-only">read-only</option>
+                            <option value="danger-full-access">danger-full-access</option>
+                          </select>
+                        </div>
+                        <div className="inspector-field">
+                          <label>Additional dirs (comma/newline)</label>
+                          <textarea
+                            value={runtimeAdditionalDirs}
+                            onChange={(event) => setRuntimeAdditionalDirs(event.target.value)}
+                            rows={2}
+                            placeholder="/path/one, /path/two"
+                          />
+                        </div>
+                        <label className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={runtimeEnableWebSearch}
+                            onChange={(event) => setRuntimeEnableWebSearch(event.target.checked)}
+                          />
+                          Enable web search
+                        </label>
+                        <div className="inspector-field">
+                          <label>Session ID</label>
+                          <input
+                            value={runtimeSessionId}
+                            onChange={(event) => setRuntimeSessionId(event.target.value)}
+                            placeholder="resume session id"
+                          />
+                        </div>
+                        <div className="inspector-field">
+                          <label>Session name</label>
+                          <input
+                            value={runtimeSessionName}
+                            onChange={(event) => setRuntimeSessionName(event.target.value)}
+                            placeholder="friendly session label"
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {runtimeMode === "openclaw" && (
+                      <>
+                        <div className="inspector-field">
+                          <label>Gateway URL</label>
+                          <input
+                            value={openClawGateway}
+                            onChange={(event) => setOpenClawGateway(event.target.value)}
+                            placeholder="ws://127.0.0.1:18789"
+                          />
+                        </div>
+                        <div className="inspector-field">
+                          <label>Agent key (optional)</label>
+                          <input
+                            value={openClawAgentKey}
+                            onChange={(event) => setOpenClawAgentKey(event.target.value)}
+                            placeholder="agent key"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
                 )}
 
                 <div className="inspector-field">
@@ -600,4 +802,31 @@ function McpTab(props: {
       )}
     </div>
   );
+}
+
+function parsePositiveInt(value: string): number | undefined {
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function parsePositiveNumber(value: string): number | undefined {
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function splitListInput(value: string): string[] | undefined {
+  const items = value
+    .split(/\n|,/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (items.length === 0) {
+    return undefined;
+  }
+  return items;
 }

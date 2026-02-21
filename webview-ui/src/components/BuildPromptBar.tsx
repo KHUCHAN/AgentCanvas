@@ -2,6 +2,8 @@ import { useEffect, useMemo } from "react";
 import type {
   BackendUsageSummary,
   CanonicalBackendId,
+  ClaudeQuotaSnapshot,
+  CliSubscriptionQuota,
   CliBackend
 } from "../messaging/protocol";
 import buildTeamEffect from "../assets/effects/agentcanvas_effect_build_team.svg";
@@ -21,6 +23,7 @@ type BuildPromptBarProps = {
   prompt: string;
   onPromptChange: (value: string) => void;
   onBuildTeam: () => void;
+  canBuild?: boolean;
   backends: CliBackend[];
   selectedBackend: CliBackend["id"];
   onBackendChange: (backendId: CliBackend["id"]) => void;
@@ -31,6 +34,9 @@ type BuildPromptBarProps = {
   budgetConstraint: "strict" | "soft";
   onBudgetConstraintChange: (value: "strict" | "soft") => void;
   usageSummaries: BackendUsageSummary[];
+  claudeQuota?: ClaudeQuotaSnapshot;
+  codexQuota?: CliSubscriptionQuota;
+  geminiQuota?: CliSubscriptionQuota;
   isBuilding: boolean;
   progress?: GenerationProgress;
   includeExistingAgents: boolean;
@@ -72,6 +78,7 @@ const PROGRESS_ICON_BY_STAGE: Record<GenerationProgress["stage"], string> = {
 };
 
 export default function BuildPromptBar(props: BuildPromptBarProps) {
+  const canBuild = props.canBuild ?? Boolean(props.prompt.trim());
   const manualBackendOptions = useMemo(
     () => props.backends.filter((backend) => backend.id !== "auto" && backend.available),
     [props.backends]
@@ -109,6 +116,12 @@ export default function BuildPromptBar(props: BuildPromptBarProps) {
   }, [manualBackendOptions, props.onBackendChange, props.selectedBackend, props.strategy]);
 
   const compact = props.hasTeam && !props.expanded;
+  const triggerBuild = () => {
+    if (props.isBuilding || !canBuild) {
+      return;
+    }
+    props.onBuildTeam();
+  };
   const usageRows = useMemo(() => {
     const callMax = Math.max(
       1,
@@ -138,7 +151,7 @@ export default function BuildPromptBar(props: BuildPromptBarProps) {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              props.onBuildTeam();
+              triggerBuild();
             }
           }}
         />
@@ -164,11 +177,16 @@ export default function BuildPromptBar(props: BuildPromptBarProps) {
         <button
           type="button"
           className="build-prompt-primary compact"
-          onClick={props.onBuildTeam}
-          disabled={props.isBuilding || !props.prompt.trim()}
+          onClick={triggerBuild}
+          disabled={props.isBuilding || !canBuild}
         >
           {props.isBuilding ? "Rebuilding..." : "Rebuild"}
         </button>
+        {props.progress && (
+          <div className={`build-prompt-compact-progress ${props.progress.stage}`}>
+            {props.progress.message}
+          </div>
+        )}
       </div>
     );
   }
@@ -296,26 +314,56 @@ export default function BuildPromptBar(props: BuildPromptBarProps) {
         </div>
 
         <div className="build-prompt-usage">
-          <div className="build-prompt-usage-title">Usage dashboard</div>
-          {usageRows.length === 0 ? (
-            <div className="build-prompt-soft">No backend usage recorded yet.</div>
-          ) : (
-            <div className="build-prompt-usage-list">
-              {usageRows.map((row) => (
-                <div key={row.backendId} className="build-prompt-usage-row">
+          <div className="build-prompt-usage-title">Subscription usage</div>
+          {(props.claudeQuota || props.codexQuota || props.geminiQuota) ? (
+            <div className="build-prompt-quota-grid">
+              {props.claudeQuota && (
+                <>
+                  <div className="build-prompt-usage-row">
+                    <div className="build-prompt-usage-row-head">
+                      <span>Claude · Session</span>
+                      <span>{props.claudeQuota.sessionUsedPct}% used{props.claudeQuota.sessionResetsAt ? ` · resets ${props.claudeQuota.sessionResetsAt}` : ""}</span>
+                    </div>
+                    <div className="build-prompt-usage-track">
+                      <div className="build-prompt-usage-fill" style={{ width: `${Math.max(2, props.claudeQuota.sessionUsedPct)}%` }} />
+                    </div>
+                  </div>
+                  <div className="build-prompt-usage-row">
+                    <div className="build-prompt-usage-row-head">
+                      <span>Claude · Week</span>
+                      <span>{props.claudeQuota.weekAllUsedPct}% used{props.claudeQuota.weekResetsAt ? ` · resets ${props.claudeQuota.weekResetsAt}` : ""}</span>
+                    </div>
+                    <div className="build-prompt-usage-track">
+                      <div className="build-prompt-usage-fill" style={{ width: `${Math.max(2, props.claudeQuota.weekAllUsedPct)}%` }} />
+                    </div>
+                  </div>
+                </>
+              )}
+              {props.codexQuota && (
+                <div className="build-prompt-usage-row">
                   <div className="build-prompt-usage-row-head">
-                    <span>{toBackendTitle(row.backendId)}</span>
-                    <span>{row.label}</span>
+                    <span>Codex · Session</span>
+                    <span>{props.codexQuota.sessionUsedPct}% used{props.codexQuota.sessionResetsAt ? ` · resets ${props.codexQuota.sessionResetsAt}` : ""}</span>
                   </div>
                   <div className="build-prompt-usage-track">
-                    <div
-                      className="build-prompt-usage-fill"
-                      style={{ width: `${Math.max(2, row.percent)}%` }}
-                    />
+                    <div className="build-prompt-usage-fill" style={{ width: `${Math.max(2, props.codexQuota.sessionUsedPct)}%` }} />
                   </div>
                 </div>
-              ))}
+              )}
+              {props.geminiQuota && (
+                <div className="build-prompt-usage-row">
+                  <div className="build-prompt-usage-row-head">
+                    <span>Gemini · Daily</span>
+                    <span>{props.geminiQuota.sessionUsedPct}% used{props.geminiQuota.sessionResetsAt ? ` · resets in ${props.geminiQuota.sessionResetsAt}` : ""}</span>
+                  </div>
+                  <div className="build-prompt-usage-track">
+                    <div className="build-prompt-usage-fill" style={{ width: `${Math.max(2, props.geminiQuota.sessionUsedPct)}%` }} />
+                  </div>
+                </div>
+              )}
             </div>
+          ) : (
+            <div className="build-prompt-soft">No quota data yet — fetched from <code>claude/codex/gemini status</code> at startup.</div>
           )}
         </div>
 
@@ -366,15 +414,15 @@ export default function BuildPromptBar(props: BuildPromptBarProps) {
 
         <div className="build-prompt-actions">
           {props.hasTeam && (
-            <button type="button" onClick={props.onCollapse} disabled={props.isBuilding}>
+            <button type="button" onClick={props.onCollapse}>
               Collapse
             </button>
           )}
           <button
             className="build-prompt-primary"
             type="button"
-            onClick={props.onBuildTeam}
-            disabled={props.isBuilding || !props.prompt.trim()}
+            onClick={triggerBuild}
+            disabled={props.isBuilding || !canBuild}
           >
             {props.isBuilding ? "Building..." : props.hasTeam ? "Rebuild Team" : "Build Team"}
           </button>
