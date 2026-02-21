@@ -195,6 +195,12 @@ class AgentCanvasPanel {
   private activeRunFlowById = new Map<string, string>();
   /** VS Code Output Channel that shows live backend probe results. Created on first use. */
   private probeOutputChannel: vscode.OutputChannel | undefined;
+  /**
+   * Tracks tasks that are blocked waiting for a human response.
+   * Key = taskId, value = { question, runId }.
+   * Cleared when the user provides an answer via CHAT_SEND or HUMAN_QUERY_RESPONSE.
+   */
+  private pendingHumanQueryByTaskId = new Map<string, { question: string; runId: string }>();
 
   private constructor(panel: vscode.WebviewPanel, extensionContext: vscode.ExtensionContext) {
     this.panel = panel;
@@ -576,11 +582,13 @@ class AgentCanvasPanel {
             this.probeOutputChannel = vscode.window.createOutputChannel("AgentCanvas: Backend Probes");
           }
           const backends = await this.detectCliBackends();
-          // Run claude/codex/gemini × /model + /status in parallel (6 probes).
-          // Cap at 5 s so rebuild is never blocked by an unavailable CLI.
+          // Run one session probe per backend in parallel (model + status in a
+          // single interactive session per CLI).  Gemini needs up to 28 s to
+          // initialise; cap the overall wait at 35 s so we don't block forever
+          // when a CLI is simply unavailable.
           await Promise.race([
             runAndLogBackendProbes(backends, this.getWorkspaceRoot(), this.probeOutputChannel),
-            new Promise<void>((resolve) => { setTimeout(resolve, 5_000); })
+            new Promise<void>((resolve) => { setTimeout(resolve, 35_000); })
           ]);
           this.probeOutputChannel.show(/* preserveFocus */ true);
           // ── End probe — caches are now populated with confirmed models ─────
@@ -815,6 +823,29 @@ class AgentCanvasPanel {
 
         const snapshot = await this.ensureSnapshot();
         const runId = this.resolveMostRecentRunId();
+
+        // If a task is blocked waiting for human input, treat this message as the answer
+        if (runId && this.pendingHumanQueryByTaskId.size > 0) {
+          const pendingEntry = [...this.pendingHumanQueryByTaskId.entries()].find(
+            ([, v]) => v.runId === runId
+          );
+          if (pendingEntry) {
+            const [blockedTaskId] = pendingEntry;
+            this.pendingHumanQueryByTaskId.delete(blockedTaskId);
+            const existingTask = this.scheduleService.getTasks(runId).find((t) => t.id === blockedTaskId);
+            this.scheduleService.patchTask(runId, blockedTaskId, {
+              status: "ready",
+              blocker: undefined,
+              meta: { ...(existingTask?.meta ?? {}), humanAnswer: content }
+            });
+            const ackMsg = createChatMessage("orchestrator", [
+              { kind: "text", text: `Understood — resuming the blocked task with your answer.` }
+            ], { runId });
+            this.appendChatMessage(ackMsg, true);
+            return { ok: true, action: "human_query_answered" };
+          }
+        }
+
         const activeTasks = runId ? this.scheduleService.getTasks(runId).filter((task) => task.status !== "done") : [];
         const completedTasks = runId ? this.scheduleService.getTasks(runId).filter((task) => task.status === "done") : [];
         const usageSummaries = await this.getBackendUsageTracker().getAllSummaries();
@@ -1332,6 +1363,44 @@ class AgentCanvasPanel {
           edgeId: message.payload.edgeId,
           event: message.payload.event,
           data: message.payload.data
+        });
+        return { ok: true };
+      }
+      case "HUMAN_QUERY_RESPONSE": {
+        const { runId, taskId, answer } = message.payload;
+        const existing = this.scheduleService.getTasks(runId).find((t) => t.id === taskId);
+        this.pendingHumanQueryByTaskId.delete(taskId);
+        this.scheduleService.patchTask(runId, taskId, {
+          status: "ready",
+          blocker: undefined,
+          meta: { ...(existing?.meta ?? {}), humanAnswer: answer }
+        });
+        return { ok: true };
+      }
+      case "GET_TASK_DETAIL": {
+        const { runId, flowName, taskId, nodeId } = message.payload;
+        const events = await loadRunEvents({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName,
+          runId
+        });
+        // Filter to events relevant to this task or node
+        const filtered = events.filter((e) => {
+          const ev = e as unknown as Record<string, unknown>;
+          return (
+            ev["taskId"] === taskId ||
+            ev["nodeId"] === (nodeId ?? taskId) ||
+            (Array.isArray(ev["taskIds"]) && (ev["taskIds"] as string[]).includes(taskId))
+          );
+        });
+        // Extract last text output if present
+        const outputEvent = [...filtered].reverse().find(
+          (e) => (e as unknown as Record<string, unknown>)["type"] === "node_output"
+        ) as unknown as Record<string, unknown> | undefined;
+        const output = outputEvent?.["output"] as string | undefined;
+        this.postMessage({
+          type: "TASK_DETAIL",
+          payload: { taskId, output, events: filtered as unknown as Record<string, unknown>[] }
         });
         return { ok: true };
       }
@@ -2783,7 +2852,8 @@ class AgentCanvasPanel {
         if (stopped) {
           const current = this.scheduleService.getTasks(input.runId);
           for (const task of current) {
-            if (isTerminalTaskStatus(task.status)) {
+            // Only cancel tasks that haven't started yet; leave in-flight IIFEs to finish
+            if (task.status !== "planned" && task.status !== "ready") {
               continue;
             }
             this.scheduleService.patchTask(input.runId, task.id, {
@@ -2792,6 +2862,11 @@ class AgentCanvasPanel {
             });
           }
           this.scheduleService.recompute(input.runId);
+          // Drain: wait for all background IIFEs to complete before exiting
+          if (inFlightTaskIds.size > 0) {
+            await sleep(idlePollMs);
+            continue;
+          }
           break;
         }
 
@@ -2803,7 +2878,22 @@ class AgentCanvasPanel {
 
         const hasFailure = tasks.some((task) => task.status === "failed");
         if (hasFailure) {
-          failedMessage = "One or more tasks failed";
+          failedMessage = failedMessage ?? "One or more tasks failed";
+          // Cancel remaining planned/ready tasks so they don't accidentally start
+          for (const task of tasks) {
+            if (task.status === "planned" || task.status === "ready") {
+              this.scheduleService.patchTask(input.runId, task.id, {
+                status: "canceled",
+                actualEndMs: Date.now()
+              });
+            }
+          }
+          this.scheduleService.recompute(input.runId);
+          // Drain: wait for any still-running background IIFEs to finish before exiting
+          if (inFlightTaskIds.size > 0) {
+            await sleep(idlePollMs);
+            continue;
+          }
           break;
         }
 
@@ -3113,7 +3203,7 @@ class AgentCanvasPanel {
         const nodeId = String(nextTask.meta?.nodeId ?? nextTask.id);
         const promptOverride = input.promptOverrides?.[nodeId];
         const communicationPolicy = this.buildCommunicationPolicy(node?.id, input.nodes, input.edges);
-        const prompt = this.buildTaskPrompt(
+        let prompt = this.buildTaskPrompt(
           nextTask,
           node,
           taskOutputs,
@@ -3125,6 +3215,11 @@ class AgentCanvasPanel {
           runInstruction,
           input.taskOptions
         );
+        // If task was previously blocked waiting for human input, inject the answer
+        const pendingHumanAnswer = nextTask.meta?.humanAnswer as string | undefined;
+        if (pendingHumanAnswer) {
+          prompt = `${prompt}\n\n[HUMAN_ANSWER]: ${pendingHumanAnswer}`;
+        }
         const runtimeOptions =
           taskAgent?.runtime?.kind === "cli"
             ? taskAgent.runtime
@@ -3242,6 +3337,24 @@ class AgentCanvasPanel {
           model: modelId,
           config: cacheConfig
         });
+
+        // Detect human-in-the-loop query: agent outputs [NEED_HUMAN: <question>]
+        const humanQueryMatch = result.output.match(/\[NEED_HUMAN:\s*([\s\S]*?)\]/);
+        if (humanQueryMatch) {
+          const question = humanQueryMatch[1].trim();
+          this.scheduleService.patchTask(input.runId, nextTask.id, {
+            status: "blocked",
+            blocker: { kind: "input", message: question }
+          });
+          this.pendingHumanQueryByTaskId.set(nextTask.id, { question, runId: input.runId });
+          const queryMessage = createChatMessage(
+            "orchestrator",
+            [{ kind: "human_query", taskId: nextTask.id, question, runId: input.runId }],
+            { runId: input.runId, taskIds: [nextTask.id], backendId: String(backend.id) }
+          );
+          this.appendChatMessage(queryMessage, true);
+          return;
+        }
 
         if (result.success) {
           taskOutputs.set(nextTask.id, result.output);
@@ -3584,8 +3697,7 @@ class AgentCanvasPanel {
                 const review = reviewProposal({
                   runId: input.runId,
                   taskId: nextTask.id,
-                  announce,
-                  orchestratorResponse: "REVISE: manual review required"
+                  announce
                 });
                 const reviewedAt = Date.now();
                 await appendRunEvent({
@@ -3666,6 +3778,16 @@ class AgentCanvasPanel {
                 }
               }
             } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              // Signal the outer loop to stop
+              failedMessage = errorMessage;
+              // Mark this task as failed in the scheduler so the UI reflects the real error
+              this.scheduleService.patchTask(input.runId, nextTask.id, {
+                status: "failed",
+                actualEndMs: Date.now(),
+                blocker: { kind: "error", message: errorMessage }
+              });
+              this.scheduleService.recompute(input.runId);
               await appendRunEvent({
                 workspaceRoot,
                 flowName: input.flowName,
@@ -3677,7 +3799,7 @@ class AgentCanvasPanel {
                   message: "proposal_failed",
                   meta: {
                     agentId: proposalAgentId,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: errorMessage
                   }
                 }
               });
@@ -3804,6 +3926,11 @@ class AgentCanvasPanel {
         .map((depNodeId) => taskIdByNodeId.get(depNodeId))
         .filter((depTaskId): depTaskId is string => Boolean(depTaskId));
     }
+
+    // Assign plannedStartMs / plannedEndMs using Critical Path Method so the
+    // Schedule / Gantt view can draw meaningful bars from the start.
+    assignPlannedTimes(tasks, now);
+
     return tasks;
   }
 
@@ -3859,6 +3986,7 @@ class AgentCanvasPanel {
     }
 
     if (tasks.length > 0) {
+      assignPlannedTimes(tasks, now);
       return tasks;
     }
     return this.buildTasksFromFlow(runId, nodes, []);
@@ -5133,4 +5261,41 @@ function parseHandoffBlock(
     targetAgentName,
     handoff
   };
+}
+
+// ─── CPM scheduling helper ─────────────────────────────────────────────────────
+
+/**
+ * Assigns `plannedStartMs` and `plannedEndMs` to each task using a simple
+ * Critical Path Method (CPM): topological DFS, each task starts as soon as
+ * all its dependencies finish.  Tasks with no dependencies start at `now`.
+ * Called at the end of buildTasksFromFlow and buildTasksFromWorkPlan so the
+ * Schedule / Gantt view has meaningful bars from the moment the run begins.
+ */
+function assignPlannedTimes(tasks: Task[], now: number): void {
+  const taskById = new Map<string, Task>(tasks.map((t) => [t.id, t]));
+  const cache = new Map<string, number>(); // taskId → plannedEndMs
+
+  function visit(taskId: string): number {
+    const cached = cache.get(taskId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const task = taskById.get(taskId);
+    if (!task) {
+      cache.set(taskId, now);
+      return now;
+    }
+    const depEnds = task.deps.map(visit);
+    const startMs = depEnds.length > 0 ? Math.max(...depEnds) : now;
+    const endMs = startMs + (task.estimateMs ?? 90_000);
+    task.plannedStartMs = startMs;
+    task.plannedEndMs = endMs;
+    cache.set(taskId, endMs);
+    return endMs;
+  }
+
+  for (const task of tasks) {
+    visit(task.id);
+  }
 }

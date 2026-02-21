@@ -463,7 +463,9 @@ export type ChatMessageContent =
   | { kind: "error"; message: string; recoverable: boolean }
   | { kind: "cost_alert"; backendId: string; usage: BackendUsageSummary }
   | { kind: "file_diff"; files: FileDiffEntry[] }
-  | { kind: "approval_request"; requestId: string; description: string; options: string[] };
+  | { kind: "approval_request"; requestId: string; description: string; options: string[] }
+  /** Orchestrator needs a human answer before the blocked task can resume. */
+  | { kind: "human_query"; taskId: string; question: string; runId: string };
 
 export type ChatMessage = {
   id: string;
@@ -964,7 +966,9 @@ export type WebviewToExtensionMessage =
       edgeId: string;
       event: string;
       data?: Record<string, unknown>;
-    }>;
+    }>
+  | RequestMessage<"GET_TASK_DETAIL", { runId: string; flowName: string; taskId: string; nodeId?: string }>
+  | RequestMessage<"HUMAN_QUERY_RESPONSE", { runId: string; taskId: string; answer: string }>;
 
 export type ExtensionToWebviewMessage =
   | { type: "INIT_STATE"; payload: { snapshot: DiscoverySnapshot } }
@@ -1013,7 +1017,8 @@ export type ExtensionToWebviewMessage =
   | { type: "TOAST"; payload: { level: "info" | "warning" | "error"; message: string } }
   | { type: "ERROR"; payload: { message: string; detail?: string } }
   | { type: "RESPONSE_OK"; inReplyTo: RequestId; result?: unknown }
-  | { type: "RESPONSE_ERROR"; inReplyTo: RequestId; error: { message: string; detail?: string } };
+  | { type: "RESPONSE_ERROR"; inReplyTo: RequestId; error: { message: string; detail?: string } }
+  | { type: "TASK_DETAIL"; payload: { taskId: string; output?: string; events: Record<string, unknown>[] } };
 
 export function isResponseMessage(
   message: ExtensionToWebviewMessage

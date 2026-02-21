@@ -267,7 +267,11 @@ export type WebviewToExtensionMessage =
       edgeId: string;
       event: string;
       data?: Record<string, unknown>;
-    }>;
+    }>
+  /** Fetch full event log for a task to display in the detail modal. */
+  | RequestMessage<"GET_TASK_DETAIL", { runId: string; flowName: string; taskId: string; nodeId?: string }>
+  /** Human replies to an orchestrator question that blocked a task. */
+  | RequestMessage<"HUMAN_QUERY_RESPONSE", { runId: string; taskId: string; answer: string }>;
 
 export type ExtensionToWebviewMessage =
   | { type: "INIT_STATE"; payload: { snapshot: DiscoverySnapshot } }
@@ -316,7 +320,9 @@ export type ExtensionToWebviewMessage =
   | { type: "TOAST"; payload: { level: "info" | "warning" | "error"; message: string } }
   | { type: "ERROR"; payload: { message: string; detail?: string } }
   | { type: "RESPONSE_OK"; inReplyTo: RequestId; result?: unknown }
-  | { type: "RESPONSE_ERROR"; inReplyTo: RequestId; error: { message: string; detail?: string } };
+  | { type: "RESPONSE_ERROR"; inReplyTo: RequestId; error: { message: string; detail?: string } }
+  /** Full event log for a task — sent in reply to GET_TASK_DETAIL. */
+  | { type: "TASK_DETAIL"; payload: { taskId: string; output?: string; events: Record<string, unknown>[] } };
 
 export function hasRequestId(message: WebviewToExtensionMessage): message is WebviewToExtensionMessage & {
   requestId: RequestId;

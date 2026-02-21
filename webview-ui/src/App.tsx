@@ -69,6 +69,7 @@ import toastInfoIcon from "./assets/micro/agentcanvas_micro_toast_info.svg";
 import toastWarnIcon from "./assets/micro/agentcanvas_micro_toast_warn.svg";
 import toastErrorIcon from "./assets/micro/agentcanvas_micro_toast_error.svg";
 import KanbanView from "./views/KanbanView";
+import TaskDetailModal from "./panels/TaskDetailModal";
 import type { TaskPanelOptions } from "./panels/TaskPanel";
 
 type ScheduleRunState = {
@@ -184,6 +185,7 @@ export default function App() {
     nowMs: 0
   });
   const [selectedScheduleTaskId, setSelectedScheduleTaskId] = useState<string>();
+  const [detailTask, setDetailTask] = useState<{ taskId: string; runId: string } | undefined>();
   const [cacheConfig, setCacheConfig] = useState<CacheConfig>(DEFAULT_CACHE_CONFIG);
   const [cacheMetrics, setCacheMetrics] = useState<CacheMetrics>(EMPTY_CACHE_METRICS);
   const [memoryItems, setMemoryItems] = useState<MemoryItem[]>([]);
@@ -2408,6 +2410,11 @@ export default function App() {
                     onSelectTask={setSelectedScheduleTaskId}
                     onSetTaskStatus={setScheduleTaskStatus}
                     onPinTask={pinScheduleTask}
+                    onOpenDetail={(taskId) => {
+                      if (scheduleRunId) {
+                        setDetailTask({ taskId, runId: scheduleRunId });
+                      }
+                    }}
                   />
                 </ErrorBoundary>
               )}
@@ -2731,6 +2738,16 @@ export default function App() {
 
       <KeyboardHelpModal open={keyboardHelpOpen} onClose={() => setKeyboardHelpOpen(false)} />
 
+      {detailTask && (
+        <TaskDetailModal
+          taskId={detailTask.taskId}
+          taskTitle={scheduleViewState.tasks.find((t) => t.id === detailTask.taskId)?.title}
+          runId={detailTask.runId}
+          flowName={activeFlowName}
+          onClose={() => setDetailTask(undefined)}
+        />
+      )}
+
       {toast && (
         <div className={`toast ${toast.level}`} onAnimationEnd={() => setToast(undefined)}>
           <img
@@ -3049,6 +3066,10 @@ function handleExtensionMessage(
           ? `${message.payload.message}: ${message.payload.detail}`
           : message.payload.message
       });
+      return;
+    }
+    case "TASK_DETAIL": {
+      // Handled directly by TaskDetailModal via onExtensionMessage subscription
       return;
     }
     case "RESPONSE_OK":

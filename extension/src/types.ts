@@ -508,7 +508,9 @@ export type ChatMessageContent =
   | { kind: "error"; message: string; recoverable: boolean }
   | { kind: "cost_alert"; backendId: string; usage: BackendUsageSummary }
   | { kind: "file_diff"; files: FileDiffEntry[] }
-  | { kind: "approval_request"; requestId: string; description: string; options: string[] };
+  | { kind: "approval_request"; requestId: string; description: string; options: string[] }
+  /** Orchestrator needs a human answer before the blocked task can resume. */
+  | { kind: "human_query"; taskId: string; question: string; runId: string };
 
 export interface ChatMessage {
   id: string;

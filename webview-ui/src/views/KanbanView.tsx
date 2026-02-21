@@ -11,6 +11,7 @@ type KanbanViewProps = {
   onSelectTask: (taskId?: string) => void;
   onSetTaskStatus?: (taskId: string, status: Task["status"]) => void;
   onPinTask?: (taskId: string, pinned: boolean) => void;
+  onOpenDetail?: (taskId: string) => void;
 };
 
 const COLUMN_META: Array<{ id: KanbanColumnId; title: string }> = [
@@ -134,6 +135,10 @@ export default function KanbanView(props: KanbanViewProps) {
                       .filter(Boolean)
                       .join(" ")}
                     onClick={() => props.onSelectTask(task.id)}
+                    onDoubleClick={(event) => {
+                      event.stopPropagation();
+                      props.onOpenDetail?.(task.id);
+                    }}
                     draggable
                     onDragStart={(event) => {
                       setDragTaskId(task.id);
