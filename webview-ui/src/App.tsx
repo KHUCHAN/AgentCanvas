@@ -39,7 +39,6 @@ import type {
   Position,
   PromptHistoryEntry,
   RunEvent,
-  RunSummary,
   SessionContext,
   StudioEdge,
   StudioNode,
@@ -63,13 +62,13 @@ import RightPanel from "./panels/RightPanel";
 import SettingsModal from "./panels/SettingsModal";
 import StatusBar from "./panels/StatusBar";
 import SkillWizardModal from "./panels/SkillWizardModal";
+import TaskDetailModal from "./panels/TaskDetailModal";
 import { getValidationCounts } from "./utils/validation";
 import logo from "./assets/agentcanvas_icon_28.png";
 import toastInfoIcon from "./assets/micro/agentcanvas_micro_toast_info.svg";
 import toastWarnIcon from "./assets/micro/agentcanvas_micro_toast_warn.svg";
 import toastErrorIcon from "./assets/micro/agentcanvas_micro_toast_error.svg";
 import KanbanView from "./views/KanbanView";
-import TaskDetailModal from "./panels/TaskDetailModal";
 import type { TaskPanelOptions } from "./panels/TaskPanel";
 
 type ScheduleRunState = {
@@ -160,6 +159,7 @@ export default function App() {
   const [buildPromptStrategy, setBuildPromptStrategy] = useState<"smart" | "manual">("smart");
   const [buildPromptPreferredBackends, setBuildPromptPreferredBackends] = useState<CanonicalBackendId[]>([]);
   const [buildPromptBudgetConstraint, setBuildPromptBudgetConstraint] = useState<"strict" | "soft">("soft");
+  const [buildPromptForceLightweightModel, setBuildPromptForceLightweightModel] = useState(true);
   const [backendUsageSummaries, setBackendUsageSummaries] = useState<BackendUsageSummary[]>([]);
   const [buildPromptIncludeExistingAgents, setBuildPromptIncludeExistingAgents] = useState(true);
   const [buildPromptIncludeExistingSkills, setBuildPromptIncludeExistingSkills] = useState(true);
@@ -173,11 +173,9 @@ export default function App() {
   const [patternNodes, setPatternNodes] = useState<StudioNode[]>([]);
   const [patternEdges, setPatternEdges] = useState<StudioEdge[]>([]);
   const [activeFlowName, setActiveFlowName] = useState("default");
-  const [runHistory, setRunHistory] = useState<RunSummary[]>([]);
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [backendOverrides, setBackendOverridesState] = useState<CliBackendOverrides>({});
   const [defaultBackendId, setDefaultBackendId] = useState<CliBackend["id"]>("auto");
-  const [selectedRunId, setSelectedRunId] = useState<string>();
   const [activeRunId, setActiveRunId] = useState<string>();
   const [scheduleRunId, setScheduleRunId] = useState<string>();
   const [scheduleViewState, setScheduleViewState] = useState<ScheduleViewState>({
@@ -522,11 +520,10 @@ export default function App() {
     return (
       customAgents > 0 ||
       patternNodes.length > 0 ||
-      runHistory.length > 0 ||
       promptHistory.some((item) => item.applied) ||
       (snapshot?.agents.length ?? 0) > 2
     );
-  }, [patternNodes.length, promptHistory, runHistory.length, snapshot?.agents]);
+  }, [patternNodes.length, promptHistory, snapshot?.agents]);
 
   const buildPromptExpanded = forceBuildPrompt || !hasTeamReady;
 
@@ -988,6 +985,7 @@ export default function App() {
     preferredBackends?: CanonicalBackendId[];
     useSmartAssignment?: boolean;
     budgetConstraint?: "strict" | "soft";
+    forceLightweightModel?: boolean;
     includeExistingAgents: boolean;
     includeExistingSkills: boolean;
     includeExistingMcpServers: boolean;
@@ -1052,6 +1050,7 @@ export default function App() {
         buildPromptStrategy === "smart" ? buildPromptPreferredBackends : undefined,
       useSmartAssignment: buildPromptStrategy === "smart",
       budgetConstraint: buildPromptBudgetConstraint,
+      forceLightweightModel: buildPromptForceLightweightModel,
       includeExistingAgents: buildPromptIncludeExistingAgents,
       includeExistingSkills: buildPromptIncludeExistingSkills,
       includeExistingMcpServers: buildPromptIncludeExistingMcpServers
@@ -1472,14 +1471,6 @@ export default function App() {
     }
   };
 
-  const refreshRunHistory = useCallback(async () => {
-    const result = await requestToExtension<{ runs: RunSummary[] }>({
-      type: "LIST_RUNS",
-      payload: { flowName: activeFlowName }
-    });
-    setRunHistory(result.runs ?? []);
-  }, [activeFlowName]);
-
   useEffect(() => {
     if (promptBackends.length === 0) {
       return;
@@ -1613,13 +1604,11 @@ export default function App() {
       });
       setActiveFlowName(result.flowName);
       setActiveRunId(result.runId);
-      setSelectedRunId(result.runId);
       setCanvasMode("kanban");
       setForceBuildPrompt(false);
       setPanelMode("chat");
       setPanelOpen(true);
       await subscribeScheduleRun(result.runId);
-      await refreshRunHistory();
     } catch (error) {
       showErrorToast(error);
       throw error;
@@ -1669,12 +1658,10 @@ export default function App() {
       });
       setActiveFlowName(result.flowName);
       setActiveRunId(result.runId);
-      setSelectedRunId(result.runId);
       setCanvasMode("kanban");
       setPanelMode("chat");
       setPanelOpen(true);
       await subscribeScheduleRun(result.runId);
-      await refreshRunHistory();
     } catch (error) {
       showErrorToast(error);
       throw error;
@@ -1691,25 +1678,7 @@ export default function App() {
       type: "STOP_RUN",
       payload: { runId }
     });
-    await refreshRunHistory();
     setActiveRunId((current) => (current === runId ? undefined : current));
-  };
-
-  const selectRun = async (runId: string) => {
-    setSelectedRunId(runId);
-    const selectedRun = runHistory.find((run) => run.runId === runId);
-    const flowName = selectedRun?.flow ?? activeFlowName;
-    setActiveFlowName(flowName);
-    await subscribeScheduleRun(runId);
-    const loaded = await requestToExtension<{ events: RunEvent[] }>({
-      type: "LOAD_RUN",
-      payload: {
-        flowName,
-        runId
-      }
-    });
-    setRunEvents(loaded.events ?? []);
-    setCanvasMode("kanban");
   };
 
   const pinOutput = async (flowName: string, nodeId: string, output: unknown) => {
@@ -1771,28 +1740,6 @@ export default function App() {
     return detail;
   };
 
-  const replayRunFromPanel = async (payload: { runId: string; modifiedPrompts?: Record<string, string> }) => {
-    setBusy(true);
-    try {
-      const result = await requestToExtension<{
-        runId: string;
-        flowName: string;
-      }>({
-        type: "REPLAY_RUN",
-        payload
-      });
-      setActiveFlowName(result.flowName);
-      setActiveRunId(result.runId);
-      setSelectedRunId(result.runId);
-      setCanvasMode("kanban");
-      await subscribeScheduleRun(result.runId);
-      await refreshRunHistory();
-      await selectRun(result.runId);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const openRunLog = (runId: string, flowName: string) => {
     const workspaceRoot = snapshot?.agent.workspaceRoot;
     if (!workspaceRoot) {
@@ -1817,23 +1764,32 @@ export default function App() {
     if (!trimmed) {
       return;
     }
+    const selectedModelId = chatModelId.trim() || undefined;
+    const effectiveBackendId = orchestratorRuntimeLock?.backendId ?? chatBackendId;
+    const effectiveModelId = orchestratorRuntimeLock?.modelId ?? selectedModelId;
     appendLocalChatMessage(
       createLocalChatMessage("user", [{ kind: "text", text: trimmed }], {
-        backendId: chatBackendId,
-        model: chatModelId.trim() || undefined
+        backendId: effectiveBackendId,
+        model: effectiveModelId
       })
     );
     setChatSending(true);
     try {
-      await requestToExtension({
+      const result = await requestToExtension<{
+        effectiveModelId?: string;
+        fallbackTrace?: Array<{ modelId: string; ok: boolean; error?: string }>;
+      }>({
         type: "CHAT_SEND",
         payload: {
           content: trimmed,
           mode: chatMode,
-          backendId: chatBackendId,
-          modelId: chatModelId.trim() || undefined
+          backendId: effectiveBackendId,
+          modelId: effectiveModelId
         }
       }, 180_000);
+      if (result.effectiveModelId && result.effectiveModelId !== chatModelId) {
+        setChatModelId(result.effectiveModelId);
+      }
       setPanelOpen(true);
     } catch (error) {
       showErrorToast(error);
@@ -1852,9 +1808,7 @@ export default function App() {
     setPanelOpen(true);
     if (result && result.runId) {
       setActiveRunId(result.runId);
-      setSelectedRunId(result.runId);
       await subscribeScheduleRun(result.runId);
-      await refreshRunHistory();
     }
   };
 
@@ -1941,6 +1895,15 @@ export default function App() {
     setPanelOpen(true);
   };
 
+  const openTaskDetailModal = useCallback((taskId: string) => {
+    const runId = scheduleRunIdRef.current;
+    setSelectedScheduleTaskId(taskId);
+    if (!runId) {
+      return;
+    }
+    setDetailTask({ taskId, runId });
+  }, []);
+
   const refreshCacheMetrics = useCallback(async () => {
     const result = await requestToExtension<{ metrics: CacheMetrics }>({
       type: "GET_CACHE_METRICS",
@@ -1950,10 +1913,6 @@ export default function App() {
       setCacheMetrics(result.metrics);
     }
   }, [activeFlowName]);
-
-  useEffect(() => {
-    void refreshRunHistory().catch(showErrorToast);
-  }, [refreshRunHistory, showErrorToast]);
 
   useEffect(() => {
     void refreshCacheMetrics().catch(showErrorToast);
@@ -2410,11 +2369,7 @@ export default function App() {
                     onSelectTask={setSelectedScheduleTaskId}
                     onSetTaskStatus={setScheduleTaskStatus}
                     onPinTask={pinScheduleTask}
-                    onOpenDetail={(taskId) => {
-                      if (scheduleRunId) {
-                        setDetailTask({ taskId, runId: scheduleRunId });
-                      }
-                    }}
+                    onOpenDetail={openTaskDetailModal}
                   />
                 </ErrorBoundary>
               )}
@@ -2494,11 +2449,7 @@ export default function App() {
                     onSelectTask={setSelectedScheduleTaskId}
                     onMoveTask={moveScheduleTask}
                     onPinTask={pinScheduleTask}
-                    onOpenDetail={(taskId) => {
-                      if (scheduleRunId) {
-                        setDetailTask({ taskId, runId: scheduleRunId });
-                      }
-                    }}
+                    onOpenDetail={openTaskDetailModal}
                   />
                 </ErrorBoundary>
               )}
@@ -2521,6 +2472,8 @@ export default function App() {
                 onTogglePreferredBackend={togglePreferredBackend}
                 budgetConstraint={buildPromptBudgetConstraint}
                 onBudgetConstraintChange={setBuildPromptBudgetConstraint}
+                forceLightweightModel={buildPromptForceLightweightModel}
+                onForceLightweightModelChange={setBuildPromptForceLightweightModel}
                 usageSummaries={backendUsageSummaries}
                 claudeQuota={claudeQuota}
                 codexQuota={codexQuota}
@@ -2565,17 +2518,12 @@ export default function App() {
               runBackends={promptBackends}
               backendOverrides={backendOverrides}
               defaultBackendId={defaultBackendId}
-              runHistory={runHistory}
               runEvents={runEvents}
               activeRunId={activeRunId}
-              selectedRunId={selectedRunId}
               selectedScheduleTask={selectedScheduleTask}
               onRunFlow={runFlowFromPanel}
               onRunNode={runNodeFromPanel}
-              onReplayRun={replayRunFromPanel}
               onStopRun={stopRunFromPanel}
-              onRefreshRunHistory={refreshRunHistory}
-              onSelectRun={selectRun}
               onPinOutput={pinOutput}
               onUnpinOutput={unpinOutput}
               onSetBackendOverrides={setBackendOverrides}
@@ -2592,7 +2540,12 @@ export default function App() {
               chatBackendLocked={Boolean(orchestratorRuntimeLock)}
               chatBackendLockReason={
                 orchestratorRuntimeLock
-                  ? `Locked to orchestrator runtime (${orchestratorRuntimeLock.orchestratorName}).`
+                  ? [
+                    `Locked to orchestrator runtime (${orchestratorRuntimeLock.orchestratorName}).`,
+                    orchestratorRuntimeLock.modelId
+                      ? `Execution model is forced to ${orchestratorRuntimeLock.modelId}; dropdown choice is ignored.`
+                      : undefined
+                  ].filter(Boolean).join(" ")
                   : undefined
               }
               onChatModeChange={setChatMode}
@@ -2746,8 +2699,8 @@ export default function App() {
       {detailTask && (
         <TaskDetailModal
           taskId={detailTask.taskId}
-          taskTitle={scheduleViewState.tasks.find((t) => t.id === detailTask.taskId)?.title}
-          taskStatus={scheduleViewState.tasks.find((t) => t.id === detailTask.taskId)?.status}
+          taskTitle={scheduleViewState.tasks.find((task) => task.id === detailTask.taskId)?.title}
+          taskStatus={scheduleViewState.tasks.find((task) => task.id === detailTask.taskId)?.status}
           runId={detailTask.runId}
           flowName={activeFlowName}
           onClose={() => setDetailTask(undefined)}
@@ -3075,11 +3028,15 @@ function handleExtensionMessage(
       return;
     }
     case "TASK_STREAM_CHUNK": {
-      // Handled directly by TaskDetailModal via onExtensionMessage subscription
+      // Handled directly by TaskDetailModal via onExtensionMessage.
       return;
     }
     case "TASK_DETAIL": {
-      // Handled directly by TaskDetailModal via onExtensionMessage subscription
+      // Handled directly by TaskDetailModal via onExtensionMessage.
+      return;
+    }
+    case "TASK_CONVERSATION": {
+      // Handled directly by TaskDetailModal via onExtensionMessage.
       return;
     }
     case "RESPONSE_OK":

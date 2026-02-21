@@ -536,6 +536,7 @@ export interface ChatMessage {
     taskIds?: string[];
     backendId?: string;
     model?: string;
+    fallbackFromModel?: string;
     tokens?: { input: number; output: number };
   };
 }

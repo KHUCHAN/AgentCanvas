@@ -23,7 +23,7 @@ import {
   unassignSkillFromAgent
 } from "./services/agentProfileService";
 import { detectAllCliBackends, pickPromptBackend, testBackend } from "./services/cliDetector";
-import { executeCliPrompt } from "./services/cliExecutor";
+import { executeCliPrompt, type CliExecutionResult } from "./services/cliExecutor";
 import { buildAgentHomeDir } from "./services/agentEnvService";
 import { assignBackends } from "./services/backendAssigner";
 import {
@@ -35,6 +35,7 @@ import {
   fetchBackendModelCatalogs,
   invalidateBackendModelCatalogCache
 } from "./services/backendModelPoller";
+import { resolveFallbackModelIdsForBackend } from "./services/modelFallbackPolicy";
 import {
   fetchClaudeQuotaSnapshot,
   fetchCodexQuotaSnapshot,
@@ -137,6 +138,21 @@ import type {
 } from "./types";
 
 const panelControllers = new Map<string, AgentCanvasPanel>();
+
+type ModelFallbackAttempt = {
+  modelId: string;
+  ok: boolean;
+  error?: string;
+};
+
+type PlannerLlmResult = {
+  output?: string;
+  success: boolean;
+  backendId: NonAutoBackendId;
+  primaryModelId?: string;
+  effectiveModelId?: string;
+  fallbackTrace: ModelFallbackAttempt[];
+};
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
@@ -636,12 +652,18 @@ class AgentCanvasPanel {
               }
             }
           }
-          const modelId = resolveModel({
+          const generationBackend = normalizeBackendId(backend.id) ?? "claude";
+          const resolvedModelId = resolveModel({
             agent: undefined,
             taskType: "generation",
             config: cacheConfig,
             backendFamily: normalizeBackendId(backend.id)
           });
+          const forcedLightweightModel =
+            message.payload.forceLightweightModel === true
+              ? pickLightweightTeamBuildModel(generationBackend)
+              : undefined;
+          const modelId = forcedLightweightModel ?? resolvedModelId;
 
           this.postGenerationProgress("building_prompt", `Building prompt for ${backend.displayName}`, 15);
           const fullPrompt = buildAgentGenerationPrompt({
@@ -657,26 +679,46 @@ class AgentCanvasPanel {
           });
 
           this.postGenerationProgress("calling_cli", `Calling ${backend.displayName}`, 45);
-          const result = await executeCliPrompt({
+          let activeModelId = modelId;
+          let result = await executeCliPrompt({
             backend,
             prompt: fullPrompt,
             workspacePath: this.getWorkspaceRoot(),
-            modelId,
+            modelId: activeModelId,
             timeoutMs: 300_000
           });
+          if (
+            !result.success &&
+            forcedLightweightModel &&
+            resolvedModelId &&
+            activeModelId !== resolvedModelId
+          ) {
+            this.postGenerationProgress(
+              "calling_cli",
+              `Lightweight model failed. Retrying ${backend.displayName} default model`,
+              52
+            );
+            activeModelId = resolvedModelId;
+            result = await executeCliPrompt({
+              backend,
+              prompt: fullPrompt,
+              workspacePath: this.getWorkspaceRoot(),
+              modelId: activeModelId,
+              timeoutMs: 300_000
+            });
+          }
           if (!result.success) {
             throw new Error(result.error || "CLI request failed");
           }
 
           this.postGenerationProgress("parsing_output", "Parsing generated structure", 75);
           const parsed = parseAgentStructure(result.output);
-          const generationBackend = normalizeBackendId(backend.id) ?? "claude";
           await usageTracker.recordCall({
             backendId: generationBackend,
             usage: result.usage,
             latencyMs: result.durationMs,
             success: result.success,
-            modelHint: modelId,
+            modelHint: activeModelId,
             flowName: "team-build",
             agentId: "team-designer"
           });
@@ -787,12 +829,29 @@ class AgentCanvasPanel {
         if (!content) {
           throw new Error("Chat content is empty");
         }
+        const snapshot = await this.ensureSnapshot();
+        const runtimeLock = this.resolveOrchestratorRuntimeLock(snapshot);
+        const effectiveBackendId = runtimeLock?.backendId ?? message.payload.backendId;
+        const requestedModelId = normalizeOptionalModelId(message.payload.modelId);
+        const effectiveRequestedModelId = runtimeLock?.modelId ?? requestedModelId;
+
+        if (
+          runtimeLock?.modelId &&
+          requestedModelId &&
+          runtimeLock.modelId.toLowerCase() !== requestedModelId.toLowerCase()
+        ) {
+          this.toast(
+            "info",
+            `Orchestrator runtime model lock is active (${runtimeLock.modelId}). UI model selection is ignored for execution.`
+          );
+        }
+
         const userMessage = createChatMessage(
           "user",
           [{ kind: "text", text: content }],
           {
-            backendId: message.payload.backendId,
-            model: message.payload.modelId
+            backendId: effectiveBackendId,
+            model: effectiveRequestedModelId
           }
         );
         this.appendChatMessage(userMessage, false);
@@ -816,7 +875,6 @@ class AgentCanvasPanel {
           return { ok: true, action: "canceled", plan: canceled };
         }
 
-        const snapshot = await this.ensureSnapshot();
         const runId = this.resolveMostRecentRunId();
 
         // If a task is blocked waiting for human input, treat this message as the answer.
@@ -920,16 +978,19 @@ class AgentCanvasPanel {
         const activeTasks = runId ? this.scheduleService.getTasks(runId).filter((task) => task.status !== "done") : [];
         const completedTasks = runId ? this.scheduleService.getTasks(runId).filter((task) => task.status === "done") : [];
         const usageSummaries = await this.getBackendUsageTracker().getAllSummaries();
+        let plannerExecution: PlannerLlmResult | undefined;
         const orchestratorResult = await this.chatOrchestrator.handleUserMessage({
           content,
           mode: message.payload.mode,
-          backendId: message.payload.backendId,
-          planner: async (plannerInput) =>
-            await this.generateWorkPlanWithLlm({
+          backendId: effectiveBackendId,
+          planner: async (plannerInput) => {
+            plannerExecution = await this.generateWorkPlanWithLlm({
               plannerPrompt: plannerInput.request,
               backendId: plannerInput.backendId,
-              modelId: message.payload.modelId
-            }),
+              modelId: effectiveRequestedModelId
+            });
+            return plannerExecution.output;
+          },
           context: {
             agents: snapshot.agents,
             activeRunId: runId,
@@ -939,8 +1000,39 @@ class AgentCanvasPanel {
             usageSummaries
           }
         });
+
+        if (plannerExecution) {
+          if (plannerExecution.success && plannerExecution.fallbackTrace.length > 1 && plannerExecution.effectiveModelId) {
+            const firstAttempt = plannerExecution.fallbackTrace[0]?.modelId;
+            if (firstAttempt && firstAttempt !== plannerExecution.effectiveModelId) {
+              this.toast(
+                "info",
+                `Planner model switched automatically: ${firstAttempt} -> ${plannerExecution.effectiveModelId}`
+              );
+            }
+          } else if (!plannerExecution.success && plannerExecution.fallbackTrace.length > 0) {
+            this.toast(
+              "warning",
+              "Planner model attempts failed. Falling back to heuristic task breakdown."
+            );
+          }
+        }
+
+        const emittedMessages: ChatMessage[] = [];
+        const fallbackFromModel = resolveFallbackFromModel(plannerExecution);
         for (const chatMessage of orchestratorResult.messages) {
-          this.appendChatMessage(chatMessage, true);
+          const nextMetadata: ChatMessage["metadata"] = {
+            ...(chatMessage.metadata ?? {}),
+            backendId: chatMessage.metadata?.backendId ?? effectiveBackendId,
+            model: plannerExecution?.effectiveModelId ?? chatMessage.metadata?.model,
+            fallbackFromModel: fallbackFromModel ?? chatMessage.metadata?.fallbackFromModel
+          };
+          const decoratedMessage: ChatMessage = {
+            ...chatMessage,
+            metadata: hasChatMetadata(nextMetadata) ? nextMetadata : undefined
+          };
+          emittedMessages.push(decoratedMessage);
+          this.appendChatMessage(decoratedMessage, true);
         }
         if (orchestratorResult.draftPlan) {
           const created = this.workPlanService.create(workspaceRoot, orchestratorResult.draftPlan);
@@ -951,12 +1043,21 @@ class AgentCanvasPanel {
           });
           if (message.payload.mode === "direct") {
             const result = await this.confirmWorkPlanAndStart(created.id);
-            return { ok: true, action: "direct_confirmed", ...result };
+            return {
+              ok: true,
+              action: "direct_confirmed",
+              effectiveModelId: plannerExecution?.effectiveModelId,
+              fallbackTrace: plannerExecution?.fallbackTrace,
+              messages: emittedMessages,
+              ...result
+            };
           }
         }
         return {
           ok: true,
-          messages: orchestratorResult.messages
+          messages: emittedMessages,
+          effectiveModelId: plannerExecution?.effectiveModelId,
+          fallbackTrace: plannerExecution?.fallbackTrace
         };
       }
       case "WORK_PLAN_MODIFY": {
@@ -3318,12 +3419,18 @@ class AgentCanvasPanel {
           typeof nextTask.meta?.assignedModel === "string"
             ? nextTask.meta.assignedModel.trim()
             : "";
-        const modelId = taskAssignedModel || resolveModel({
+        const resolvedModel = resolveModel({
           agent: taskAgent,
           taskType: "execution",
           config: cacheConfig,
           backendFamily: normalizeBackendId(backend.id)
         });
+        const hasExplicitAgentModel =
+          Boolean(taskAgent?.preferredModel?.trim()) ||
+          Boolean(taskAgent?.runtime?.kind === "cli" && taskAgent.runtime.modelId?.trim());
+        const modelId = hasExplicitAgentModel
+          ? resolvedModel
+          : (taskAssignedModel || resolvedModel);
         const runInstruction = input.instruction?.trim();
         const memoryInstruction =
           runInstruction && runInstruction.length > 0
@@ -4382,6 +4489,15 @@ class AgentCanvasPanel {
     const planDescription = typeof task.meta?.planDescription === "string"
       ? task.meta.planDescription.trim()
       : "";
+    const hasPlanContext =
+      Boolean(planDescription) || typeof task.meta?.planIndex === "number";
+    const planExecutionGuidance = hasPlanContext
+      ? [
+        "This task is already decomposed by the orchestrator from a confirmed work plan.",
+        "Do not ask for plan files, plan IDs, or external plan documents.",
+        "Use Task + Task detail in this prompt as the source of truth and execute directly."
+      ]
+      : [];
     const planBackendHint = typeof task.meta?.assignedBackend === "string"
       ? task.meta.assignedBackend.trim()
       : "";
@@ -4400,6 +4516,7 @@ class AgentCanvasPanel {
         promptOverride.trim(),
         ...(workInstructionLine ? ["", "## Work request", workInstructionLine] : []),
         ...(planDescription ? ["Task detail:", planDescription] : []),
+        ...(planExecutionGuidance.length > 0 ? ["", "## Plan execution", ...planExecutionGuidance] : []),
         ...(planBackendHint ? [`Preferred backend: ${planBackendHint}`] : []),
         ...(workOptionsLine ? [workOptionsLine] : []),
         "",
@@ -4425,6 +4542,7 @@ class AgentCanvasPanel {
         `Role: ${role}`,
         `Task: ${task.title}`,
         ...(planDescription ? [`Task detail: ${planDescription}`] : []),
+        ...planExecutionGuidance,
         ...(planBackendHint ? [`Preferred backend: ${planBackendHint}`] : []),
         ...(workInstructionLine ? [workInstructionLine] : []),
         ...(workOptionsLine ? [workOptionsLine] : []),
@@ -4506,11 +4624,106 @@ class AgentCanvasPanel {
     }
   }
 
+  private resolveOrchestratorRuntimeLock(snapshot: DiscoverySnapshot): {
+    backendId: NonAutoBackendId;
+    modelId?: string;
+    orchestratorName: string;
+  } | undefined {
+    const orchestrator = snapshot.agents.find((agent) => agent.isOrchestrator || agent.role === "orchestrator");
+    const runtime = orchestrator?.runtime;
+    if (!orchestrator || !runtime || runtime.kind !== "cli" || runtime.backendId === "auto") {
+      return undefined;
+    }
+    return {
+      backendId: runtime.backendId,
+      modelId: normalizeOptionalModelId(runtime.modelId),
+      orchestratorName: orchestrator.name
+    };
+  }
+
+  private async executeCliPromptWithModelFallback(input: {
+    backend: CliBackend;
+    prompt: string;
+    workspacePath: string;
+    modelId?: string;
+    timeoutMs?: number;
+    maxFallbacks?: number;
+  }): Promise<{
+    result: CliExecutionResult;
+    attemptedModelId?: string;
+    effectiveModelId?: string;
+    fallbackTrace: ModelFallbackAttempt[];
+  }> {
+    const primaryModelId = normalizeOptionalModelId(input.modelId);
+    const fallbackModelIds = resolveFallbackModelIdsForBackend({
+      backendId: input.backend.id,
+      primaryModelId,
+      maxFallbacks: Math.max(0, input.maxFallbacks ?? 2)
+    });
+
+    const attemptModelIds: Array<string | undefined> = [];
+    const seen = new Set<string>();
+    for (const candidate of [primaryModelId, ...fallbackModelIds]) {
+      const normalized = normalizeOptionalModelId(candidate);
+      const key = normalized?.toLowerCase() ?? "__backend_default__";
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      attemptModelIds.push(normalized);
+    }
+    if (attemptModelIds.length === 0) {
+      attemptModelIds.push(undefined);
+    }
+
+    const fallbackTrace: ModelFallbackAttempt[] = [];
+    let lastResult: CliExecutionResult | undefined;
+    let lastAttemptedModelId: string | undefined;
+
+    for (const attemptModelId of attemptModelIds) {
+      const result = await executeCliPrompt({
+        backend: input.backend,
+        prompt: input.prompt,
+        workspacePath: input.workspacePath,
+        modelId: attemptModelId,
+        timeoutMs: input.timeoutMs
+      });
+      lastResult = result;
+      lastAttemptedModelId = attemptModelId;
+      fallbackTrace.push({
+        modelId: attemptModelId ?? "backend-default",
+        ok: result.success,
+        error: result.success ? undefined : result.error
+      });
+
+      if (result.success) {
+        return {
+          result,
+          attemptedModelId: attemptModelId,
+          effectiveModelId: normalizeOptionalModelId(result.usage?.model) ?? attemptModelId,
+          fallbackTrace
+        };
+      }
+    }
+
+    return {
+      result: lastResult ?? {
+        success: false,
+        output: "",
+        error: "No model execution attempt was made.",
+        durationMs: 0
+      },
+      attemptedModelId: lastAttemptedModelId,
+      effectiveModelId: undefined,
+      fallbackTrace
+    };
+  }
+
   private async generateWorkPlanWithLlm(input: {
     plannerPrompt: string;
     backendId: NonAutoBackendId;
     modelId?: string;
-  }): Promise<string | undefined> {
+  }): Promise<PlannerLlmResult> {
     const workspaceRoot = this.getWorkspaceRoot();
     const backends = await this.detectCliBackends();
     const usageSummaries = await this.getBackendUsageTracker().getAllSummaries(
@@ -4526,15 +4739,20 @@ class AgentCanvasPanel {
         config,
         backendFamily: normalizeBackendId(backend.id)
       });
-    const result = await executeCliPrompt({
+
+    const execution = await this.executeCliPromptWithModelFallback({
       backend,
       prompt: input.plannerPrompt,
       workspacePath: workspaceRoot,
       modelId: resolvedModel,
-      timeoutMs: 180_000
+      timeoutMs: 180_000,
+      maxFallbacks: 2
     });
+    const result = execution.result;
+    const effectiveModelId =
+      execution.effectiveModelId ?? execution.attemptedModelId ?? normalizeOptionalModelId(resolvedModel);
 
-    const usageCost = calculateUsageCost(result.usage, resolvedModel);
+    const usageCost = calculateUsageCost(result.usage, effectiveModelId);
     const usage = result.usage
       ? {
         ...result.usage,
@@ -4549,7 +4767,7 @@ class AgentCanvasPanel {
         usage,
         latencyMs: result.durationMs,
         success: result.success,
-        modelHint: resolvedModel,
+        modelHint: effectiveModelId,
         flowName: "work-plan",
         agentId: this.snapshot?.agents.find((agent) => agent.isOrchestrator)?.id
       });
@@ -4557,10 +4775,25 @@ class AgentCanvasPanel {
     }
 
     if (!result.success) {
-      return undefined;
+      return {
+        output: undefined,
+        success: false,
+        backendId: input.backendId,
+        primaryModelId: normalizeOptionalModelId(resolvedModel),
+        effectiveModelId: undefined,
+        fallbackTrace: execution.fallbackTrace
+      };
     }
+
     const output = result.output.trim();
-    return output.length > 0 ? output : undefined;
+    return {
+      output: output.length > 0 ? output : undefined,
+      success: true,
+      backendId: input.backendId,
+      primaryModelId: normalizeOptionalModelId(resolvedModel),
+      effectiveModelId,
+      fallbackTrace: execution.fallbackTrace
+    };
   }
 
   private async resolveBackendForTask(
@@ -4710,7 +4943,12 @@ class AgentCanvasPanel {
       flowName: flow.flowName,
       nodes: flow.nodes,
       edges: flow.edges,
-      instruction: `Execute confirmed work plan "${confirmed.id}".\n${instructionLines.join("\n")}`,
+      instruction: [
+        "Execute only the assigned task item from orchestrator context.",
+        "Task title and Task detail are already provided in each task prompt.",
+        "Do not search for plan files or plan IDs in the workspace.",
+        instructionLines.join("\n")
+      ].join("\n"),
       requestedBackendId: backendId,
       usePinnedOutputs: false
     }).catch((error) => {
@@ -5414,6 +5652,59 @@ function mapPriorityToValue(priority: TaskSubmissionOptions["priority"] | undefi
   }
   if (priority === "low") {
     return 2;
+  }
+  return undefined;
+}
+
+function normalizeOptionalModelId(modelId?: string): string | undefined {
+  const trimmed = modelId?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function hasChatMetadata(metadata: ChatMessage["metadata"] | undefined): boolean {
+  if (!metadata) {
+    return false;
+  }
+  return Boolean(
+    metadata.runId ||
+    (metadata.taskIds && metadata.taskIds.length > 0) ||
+    metadata.backendId ||
+    metadata.model ||
+    metadata.fallbackFromModel ||
+    metadata.tokens
+  );
+}
+
+function resolveFallbackFromModel(result: PlannerLlmResult | undefined): string | undefined {
+  if (!result?.success || !result.effectiveModelId) {
+    return undefined;
+  }
+  const primary = normalizeOptionalModelId(result.primaryModelId);
+  if (primary && primary.toLowerCase() !== result.effectiveModelId.toLowerCase()) {
+    return primary;
+  }
+  const firstAttempt = normalizeOptionalModelId(result.fallbackTrace[0]?.modelId);
+  if (
+    firstAttempt &&
+    firstAttempt !== "backend-default" &&
+    firstAttempt.toLowerCase() !== result.effectiveModelId.toLowerCase()
+  ) {
+    return firstAttempt;
+  }
+  return undefined;
+}
+
+function pickLightweightTeamBuildModel(
+  backendId: CanonicalBackendId | undefined
+): string | undefined {
+  if (backendId === "gemini") {
+    return "gemini-3-flash-preview";
+  }
+  if (backendId === "codex") {
+    return "gpt-4o-mini";
+  }
+  if (backendId === "claude") {
+    return "claude-haiku-4-5-20251001";
   }
   return undefined;
 }

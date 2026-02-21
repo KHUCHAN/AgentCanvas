@@ -491,6 +491,7 @@ export type ChatMessage = {
     taskIds?: string[];
     backendId?: string;
     model?: string;
+    fallbackFromModel?: string;
     tokens?: { input: number; output: number };
   };
 };
@@ -865,6 +866,7 @@ export type WebviewToExtensionMessage =
         preferredBackends?: CanonicalBackendId[];
         useSmartAssignment?: boolean;
         budgetConstraint?: "strict" | "soft";
+        forceLightweightModel?: boolean;
         includeExistingAgents: boolean;
         includeExistingSkills: boolean;
         includeExistingMcpServers: boolean;
