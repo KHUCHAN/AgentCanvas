@@ -7,7 +7,10 @@ export type CollabEventType =
   | "task_dispatched"
   | "proposal_submitted"
   | "proposal_reviewed"
-  | "announce";
+  | "announce"
+  | "human_query_requested"
+  | "human_query_answered"
+  | "task_resumed_after_human_query";
 
 export type CollaborationEvent = {
   ts: number;

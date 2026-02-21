@@ -1,7 +1,7 @@
-# AgentCanvas 이펙트 & 에셋 AI 생성 프롬프트 모음
+# Open Claw 이펙트 & 에셋 AI 생성 프롬프트 모음
 
 **작성일:** 2026-02-19
-**목적:** AgentCanvas 프로젝트에 필요한 모든 시각 에셋(이미지, GIF, Lottie, 아이콘)을 AI 이미지 생성 도구로 만들기 위한 프롬프트 모음
+**목적:** Open Claw 프로젝트에 필요한 모든 시각 에셋(이미지, GIF, Lottie, 아이콘)을 AI 이미지 생성 도구로 만들기 위한 프롬프트 모음
 
 ---
 
@@ -10,7 +10,7 @@
 ```
 DESIGN SYSTEM CONTEXT — ALWAYS INCLUDE THIS BLOCK:
 
-Brand: "AgentCanvas" — AI agent orchestration canvas tool (VS Code extension)
+Brand: "Open Claw" — AI agent orchestration canvas tool (VS Code extension)
 Theme: Dark UI, developer tool aesthetic, n8n/Retool/Figma inspired
 Background: Dark navy #181b20
 Elevated BG: Dark gray #1f232a
@@ -31,7 +31,7 @@ Agent Character Style: Cute & friendly — rounded shapes, big expressive eyes, 
 ### LOGO-1. 메인 로고 (512×512 PNG, 투명)
 
 ```
-A modern, minimalist logo for a developer tool called "AgentCanvas".
+A modern, minimalist logo for a developer tool called "Open Claw".
 
 The logo combines two visual concepts:
 1. A stylized canvas/artboard shape — a rounded rectangle with subtle grid dots inside, representing a node-based visual editor workspace
@@ -48,7 +48,7 @@ Output: 512×512px, transparent PNG
 ### LOGO-2. 사이드바 콤팩트 아이콘 (56×56 PNG @2x, 투명)
 
 ```
-A simplified, compact version of the AgentCanvas logo optimized for very small sizes (28×28px rendered, 56×56px source for retina).
+A simplified, compact version of the Open Claw logo optimized for very small sizes (28×28px rendered, 56×56px source for retina).
 
 Keep only the essential shape: a rounded square canvas outline with a single central neural node and 3 radiating connection lines. Remove all fine details. Use thick, bold strokes (2-3px at rendered size).
 
@@ -61,7 +61,7 @@ Output: 56×56px, transparent PNG
 ### LOGO-3. VS Code 마켓플레이스 아이콘 (128×128 PNG)
 
 ```
-The AgentCanvas logo placed on a dark navy (#181b20) rounded-rectangle background card.
+The Open Claw logo placed on a dark navy (#181b20) rounded-rectangle background card.
 
 The logo itself: teal (#2fa184) geometric canvas icon with neural node center and radiating connections. Centered with generous padding (~20px each side).
 
@@ -75,7 +75,7 @@ Output: 128×128px, dark navy background, PNG
 ### LOGO-4. 빈 캔버스 일러스트 (640×400 PNG, 투명)
 
 ```
-An empty state illustration for a node-based canvas editor called "AgentCanvas".
+An empty state illustration for a node-based canvas editor called "Open Claw".
 
 Scene: A minimal, abstract illustration showing a dark workspace with a subtle dot grid pattern. In the center, 3-4 translucent ghost nodes (rounded rectangles) are connected by thin dashed lines, suggesting where the user will place their agent nodes. A large "+" icon or cursor arrow floats near one ghost node, inviting interaction.
 
@@ -95,9 +95,9 @@ Output: 640×400px, transparent PNG
 ### LOGO-5. 로딩/폴백 SVG (가변 크기)
 
 ```
-A loading state logo for AgentCanvas in SVG format.
+A loading state logo for Open Claw in SVG format.
 
-Design: The AgentCanvas canvas icon (rounded rectangle with neural node) but designed for animation:
+Design: The Open Claw canvas icon (rounded rectangle with neural node) but designed for animation:
 - The central node has a circular "pulse ring" around it (single ring, 2px stroke)
 - The 3 radiating connection lines are segmented (dashed) so they can animate as data flow
 - The outer small nodes are simple circles
@@ -118,7 +118,7 @@ Output: SVG, viewBox="0 0 120 120", all paths with class attributes
 ### LOGO-6. 파비콘 (32×32 PNG, 투명)
 
 ```
-An ultra-simplified AgentCanvas favicon for browser tab display at 32×32px.
+An ultra-simplified Open Claw favicon for browser tab display at 32×32px.
 
 Keep only: A single rounded square with a dot in the center and 2 tiny line segments radiating outward. Maximum 3 shapes total.
 
@@ -2088,4 +2088,4 @@ CSS 배경으로 반복시켜 사용하기 좋은 라인입니다.
 
 ---
 
-*이 문서의 모든 프롬프트는 AgentCanvas 디자인 시스템(UI.md §1.3 컬러 팔레트, §3 CSS 디자인 시스템)에 맞춰 작성되었습니다.*
+*이 문서의 모든 프롬프트는 Open Claw 디자인 시스템(UI.md §1.3 컬러 팔레트, §3 CSS 디자인 시스템)에 맞춰 작성되었습니다.*

@@ -1,4 +1,4 @@
-# AgentCanvas UX — Prompt-First 리디자인, 접근성, 사용자 경험
+# Open Claw UX — Prompt-First 리디자인, 접근성, 사용자 경험
 
 **Date:** 2026-02-19
 
@@ -48,7 +48,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  🟢 AgentCanvas                           ⚙ Settings    ⌘K  │
+│  🟢 Open Claw                           ⚙ Settings    ⌘K  │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │                                                              │
@@ -87,7 +87,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  🟢 AgentCanvas   [Kanban│Graph│Schedule]    ⚙ Settings  ⌘K │
+│  🟢 Open Claw   [Kanban│Graph│Schedule]    ⚙ Settings  ⌘K │
 ├───────────────────────────────┬──────────────────────────────┤
 │                               │  MY TEAM                     │
 │  KANBAN BOARD                 │  ────────────────────    │
@@ -193,13 +193,13 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  🟢 AgentCanvas    [Kanban│Graph│Schedule]    ⚙ Settings  ⌘K │
+│  🟢 Open Claw    [Kanban│Graph│Schedule]    ⚙ Settings  ⌘K │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 | 요소 | 기능 |
 |------|------|
-| 🟢 AgentCanvas | 브랜드 + 홈 (초기 빌드 프롬프트 화면 복귀) |
+| 🟢 Open Claw | 브랜드 + 홈 (초기 빌드 프롬프트 화면 복귀) |
 | [Kanban \| Graph \| Schedule] | 메인 뷰 전환 (팀 빌드 후에만 노출) |
 | ⚙ Settings | 통합 설정 모달 |
 | ⌘K | Command Bar |
@@ -639,83 +639,53 @@ function getColumn(status: Task["status"]): KanbanColumn["id"] {
 
 ---
 
-### 10. UI 리뷰 지적사항 (2026-02-20 반영)
+### 10. UI 리뷰 지적사항 (2026-02-20 반영) - ✅ 완료
 
-> 실제 빌드된 UI 스크린샷 기반 리뷰 결과, 아래 7가지 개선사항이 도출되었습니다.
+> 실제 빌드된 UI 스크린샷 기반 리뷰 결과, 아래 7가지 개선 사항이 도출되었습니다.
 
-#### REV-1. 스크롤 미구현
-- **현상:** Inspector, Library, Run History 등 오버플로우 가능 영역에 스크롤이 전혀 동작하지 않음
-- **원인:** `.panel-content`, `.inspector-block` 등에 `overflow: auto`가 있으나 부모에 `max-height` 또는 `flex` 기반 높이 제한 없음
+#### REV-1. 스크롤 미구현 ✅
 - **변경:** 오른쪽 패널 전체를 `display: flex; flex-direction: column; height: 100%` 구조로 리팩터, 각 콘텐츠 영역에 `flex: 1; overflow-y: auto; min-height: 0` 적용
 
-#### REV-2. AI Prompt 탭 제거 → 캔버스 하단 Build Prompt 상시 배치
-- **현상:** AI Prompt가 오른쪽 패널의 한 탭으로 존재하여 접근성이 낮고, 핵심 워크플로우(팀 빌드)가 숨겨져 있음
-- **변경:** 오른쪽 패널에서 "AI Prompt" 탭 **완전 삭제**. 대신 캔버스 영역 하단 가운데에 Build Team 프롬프트 입력 UI를 **항상** 표시 (팀 존재 여부 무관). 이미 팀이 있는 경우 축소된 형태(`[▶ Rebuild Team]` + 입력 필드)로 전환
-- **영향:** `RightPanel.tsx`의 `mode: "prompt"` 제거, `App.tsx` 또는 `GraphView.tsx`에 `<BuildPromptBar />` 오버레이 추가
+#### REV-2. AI Prompt 탭 제거 → 캔버스 하단 Build Prompt 상시 배치 ✅
+- **변경:** 오른쪽 패널에서 "AI Prompt" 탭 **완전 삭제**. 대신 캔버스 영역 하단 가운데에 Build Team 프롬프트 입력 UI를 **항상** 표시.
 
-#### REV-3. 태스크 지시 탭 신규 추가
-- **현상:** Build Team 이후 에이전트 팀에 작업을 지시할 UI가 없음
-- **변경:** 오른쪽 패널에 **"Task"** 탭 신규 추가. 기존 "AI Prompt" 위치를 대체. 구성:
-  - 작업 프롬프트 입력 (textarea + `[▶ Submit Work]` 버튼)
-  - 실행 시 Orchestrator에게 전달 → Task[] 자동 분해 → 칸반 카드 생성
-  - 하단에 실행 히스토리 리스트 (기존 `RunPanel` 기능 흡수 가능)
-- **연결:** UX.md §4.3 Team Panel의 "WORK" 섹션 설계를 따름
+#### REV-3. 태스크 지시 탭 신규 추가 ✅
+- **변경:** 오른쪽 패널에 **"Task"** 탭 신규 추가. 구성: 작업 프롬프트 입력 + 실행 히스토리.
 
-#### REV-4. Memory 탭 제거 → Orchestrator 자동 관리
-- **현상:** Memory 탭이 수동 CRUD UI로 존재하나, 일반 사용자가 직접 관리할 필요 없음
-- **변경:** 오른쪽 패널에서 "Memory" 탭 **완전 삭제**. Memory(context, learning, decisions)는 Orchestrator가 실행 중 자동으로 관리. 필요 시 Settings 모달 내 "Advanced → Memory" 서브 섹션으로 이동
-- **영향:** `MemoryPanel.tsx` 삭제 또는 SettingsModal 내부로 이동, `RightPanel.tsx`에서 `mode: "memory"` 제거
+#### REV-4. Memory 탭 제거 → Orchestrator 자동 관리 ✅
+- **변경:** 오른쪽 패널에서 "Memory" 탭 **완전 삭제**. Memory는 Orchestrator가 자동 관리.
 
-#### REV-5. "+ Agent" 버튼 추가
-- **현상:** 툴바에 `[+]`(일반), `[+ Rule]`만 존재. Agent 수동 추가 경로 없음
-- **변경:** `[+ Rule]` 좌측에 **`[+ Agent]`** 버튼 추가. 클릭 시 에이전트 생성 팝업 (이름, 역할, 프로바이더 선택). 생성된 Agent가 캔버스에 새 노드로 배치됨
-- **영향:** 툴바 순서: `[+] [+ Agent] [+ Rule]`
+#### REV-5. "+ Agent" 버튼 추가 ✅
+- **변경:** `[+ Rule]` 좌측에 **`[+ Agent]`** 버튼 추가.
 
-#### REV-6. Agent 더블클릭 → 관리 팝업
-- **현상:** Agent 노드 클릭 시 오른쪽 Inspector에 정보 표시되나, 스킬/MCP 관리는 별도 조작 필요
-- **변경:** Agent 노드 **더블클릭** 시 `AgentDetailModal` 즉시 열림. 모달에서 4개 탭(Overview / Skills / Rules / MCP)으로 에이전트 설정 전체 관리 가능. 싱글클릭은 기존처럼 Inspector에 요약 표시
-- **영향:** `GraphView.tsx`의 `onNodeDoubleClick` 이벤트에 `onOpenAgentDetail(agentId)` 연결
+#### REV-6. Agent 더블클릭 → 관리 팝업 ✅
+- **변경:** Agent 노드 **더블클릭** 시 `AgentDetailModal` 즉시 열림.
 
-#### REV-7. 캔버스 = 실시간 모니터링 화면
-- **현상:** Graph 뷰가 정적 구조도에 가까움. 실행 중 에이전트 상태 변화가 시각적으로 표현되지 않음
-- **변경:** 캔버스를 **실시간 모니터링 대시보드**로 전환:
-  - Agent 노드에 현재 상태 표시 (idle/thinking/working/error/done → 테두리 색 + 이펙트 SVG)
-  - 실행 중 엣지에 데이터 흐름 파티클 애니메이션 (EDGE-4 SVG 활용)
-  - Task 실행 중인 Agent 노드에 프로그레스 바 표시
-  - Orchestrator → Worker 위임 시 위임 엣지 하이라이트
-  - 완료된 Agent 노드에 체크마크 오버레이 (EFFECT-2 SVG)
-  - 에러 발생 시 Agent 노드 레드 펄스 (EFFECT-3 SVG)
-- **영향:** `AgentNode.tsx` 확장, `GraphView.tsx`에 TaskEvent 구독 + 노드 스타일 동적 업데이트
+#### REV-7. 캔버스 = 실시간 모니터링 화면 ✅
+- **변경:** 캔버스를 **실시간 모니터링 대시보드**로 전환 (상태 표시, 프로그레스 바, 이펙트 SVG 적용).
 
 ---
 
-#### 변경 후 오른쪽 패널 탭 구성
+## Part 2: 최신 UX 업데이트 내역 (2026-02-20)
 
-| 기존 | 변경 후 | 비고 |
-|------|---------|------|
-| Node Library | **Node Library** | 유지 |
-| Inspector | **Inspector** | 유지 + 스크롤 수정 |
-| AI Prompt | ~~삭제~~ | → 캔버스 하단 Build Prompt로 이동 |
-| Run | **Task** | 작업 지시 + 실행 기능 흡수 |
-| Memory | ~~삭제~~ | → Orchestrator 자동 / Settings 이동 |
+### 2.1 StatusBar 최적화
+- 기존의 복잡한 레이아웃을 섹션별(Agents, Tasks, Cost, Context, Backends)로 정리하여 가독성 향상.
 
-#### 변경 후 툴바 구성
-
-```
-[+] [+ Agent ★신규] [+ Rule]    [Node Library] [Inspector] [Task ★신규] [Run]
-```
+### 2.2 RightPanel 워크플로우 고정
+- **Node Library / Task / Run History** 3탭 체제로 고정하여 "지시-실행-확인" 흐름을 강화.
 
 ---
 
-**예상 총 작업일: 9~12일**
+**예상 총 작업일: 9~12일 (Phase 1-3 완료)**
 
-| Phase | 기간 | 우선순위 |
-|-------|------|----------|
-| Phase 1: Build Prompt | 2일 | 🔴 즉시 |
-| Phase 2: KanbanView | 2~3일 | 🔴 즉시 |
-| Phase 3: Team Panel | 2일 | 🔴 즉시 |
-| Phase 4: 헤더 + 사이드바 정리 | 1~2일 | 🟡 다음 |
-| Phase 5: Settings + 마무리 | 2~3일 | 🟡 다음 |
+| Phase | 기간 | 우선순위 | 상태 |
+|-------|------|----------|------|
+| Phase 1: Build Prompt | 2일 | 🔴 즉시 | ✅ 완료 |
+| Phase 2: KanbanView | 2~3일 | 🔴 즉시 | ✅ 완료 |
+| Phase 3: Team Panel | 2일 | 🔴 즉시 | ✅ 완료 |
+| Phase 4: 헤더 + 사이드바 정리 | 1~2일 | 🟡 다음 | 진행 중 |
+| Phase 5: Settings + 마무리 | 2~3일 | 🟡 다음 | 진행 중 |
+
 
 ---
 
@@ -1158,4 +1128,4 @@ Phase 3 — MEDIUM (3~5일)
 
 ---
 
-*이 문서는 AgentCanvas의 UX 리디자인 및 키보드 접근성 개선 계획서입니다.*
+*이 문서는 Open Claw의 UX 리디자인 및 키보드 접근성 개선 계획서입니다.*

@@ -1,4 +1,4 @@
-# AgentCanvas Framework — 아키텍처, 에이전트 시스템, 프로토콜
+# Open Claw Framework — 아키텍처, 에이전트 시스템, 프로토콜
 
 **Date**: 2026-02-19 (용어 정의 추가: 2026-02-20)
 
@@ -6,7 +6,7 @@
 
 ## 0. 핵심 용어 정의 (Glossary)
 
-> AgentCanvas 전체 문서에서 공통으로 사용하는 핵심 개념입니다. 모든 문서는 이 정의를 따릅니다.
+> Open Claw 전체 문서에서 공통으로 사용하는 핵심 개념입니다. 모든 문서는 이 정의를 따릅니다.
 
 ### Skill (스킬) — 정적 능력
 
@@ -117,7 +117,7 @@ Work Prompt → Orchestrator 분해 → Task[] 생성 → Agent별 할당 → �
 
 ### 1.1 Core Concepts
 
-The AgentCanvas agent system introduces **Role-based orchestration** and **Delegation patterns** to enable multi-agent coordination.
+The Open Claw agent system introduces **Role-based orchestration** and **Delegation patterns** to enable multi-agent coordination.
 
 #### Central Architecture Pattern
 
@@ -709,7 +709,7 @@ Minimum events to track:
 ### 4.6 Incremental Build Plan
 
 1. Read/parse Codex and VS Code MCP config files.
-2. Render MCP server list in AgentCanvas UI.
+2. Render MCP server list in Open Claw UI.
 3. Implement add/edit/delete with schema validation.
 4. Add diff preview and apply changes.
 5. Add smoke checks and docs.

@@ -22,6 +22,7 @@ type ScheduleViewProps = {
   onSelectTask: (taskId?: string) => void;
   onMoveTask: (taskId: string, forceStartMs: number, forceAgentId?: string) => void;
   onPinTask: (taskId: string, pinned: boolean) => void;
+  onOpenDetail?: (taskId: string) => void;
 };
 
 const LANE_HEIGHT = 92;
@@ -285,11 +286,14 @@ function ScheduleCanvas(props: ScheduleViewProps) {
           if (node.type !== "scheduleTask") {
             return;
           }
-          const task = props.tasks.find((item) => item.id === node.id);
-          if (!task) {
-            return;
+          if (props.onOpenDetail) {
+            props.onOpenDetail(node.id);
+          } else {
+            const task = props.tasks.find((item) => item.id === node.id);
+            if (task) {
+              props.onPinTask(task.id, !Boolean(task.overrides?.pinned));
+            }
           }
-          props.onPinTask(task.id, !Boolean(task.overrides?.pinned));
         }}
         onNodeDragStop={(_event, node) => {
           if (node.type !== "scheduleTask") {

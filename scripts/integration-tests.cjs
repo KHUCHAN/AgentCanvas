@@ -33,7 +33,12 @@ async function run() {
     test('Schedule service patchTask deep-merges nested fields', testScheduleServiceDeepPatch),
     test('Run store persists summary and events', testRunStoreRoundtrip),
     test('Pin store set/get/clear roundtrip', testPinStoreRoundtrip),
-    test('Sandbox + proposal workflow roundtrip', testSandboxProposalRoundtrip)
+    test('Sandbox + proposal workflow roundtrip', testSandboxProposalRoundtrip),
+    test('Orchestrator prompt enforces NEED_HUMAN policy', testNeedHumanPromptDirective),
+    test('Agent generation prompt includes role-aware model guide', testAgentGenerationModelGuidePrompt),
+    test('Human query parser handles NEED_HUMAN tags', testHumanQueryParser),
+    test('Task conversation extractor sorts and filters turns', testTaskConversationExtractor),
+    test('Human query lifecycle events roundtrip to collab log', testHumanQueryLifecycleRoundtrip)
   ];
 
   const results = await Promise.all(cases);
@@ -479,14 +484,21 @@ function testBackendProfilesModelCoverage() {
   const codexModels = new Set((byBackend.get('codex')?.models || []).map((model) => model.id));
   const geminiModels = new Set((byBackend.get('gemini')?.models || []).map((model) => model.id));
 
-  assert.ok(claudeModels.has('claude-sonnet-4-5-20250929'), 'claude sonnet model should exist');
-  assert.ok(claudeModels.has('claude-haiku-4-5-20251001'), 'claude haiku model should exist');
-  assert.ok(codexModels.has('gpt-4.1'), 'codex gpt-4.1 should exist');
-  assert.ok(codexModels.has('codex-1'), 'codex-1 should exist');
-  assert.ok(geminiModels.has('gemini-2.5-flash'), 'gemini 2.5 flash should exist');
-  assert.ok(geminiModels.has('gemini-2.5-pro'), 'gemini 2.5 pro should exist');
+  assert.ok(claudeModels.has('claude-sonnet-4-6'), 'claude sonnet 4.6 should exist');
+  assert.ok(claudeModels.has('claude-opus-4-6'), 'claude opus 4.6 should exist');
+  assert.ok(claudeModels.has('claude-haiku-4-5-20251001'), 'claude haiku 4.5 fallback should exist');
+  assert.ok(codexModels.has('gpt-4.1'), 'codex gpt-4.1 fallback should exist');
+  assert.ok(
+    [...codexModels].some((id) => id.startsWith('gpt-5')),
+    'codex should expose at least one gpt-5 family model'
+  );
+  assert.ok(geminiModels.has('gemini-3-pro-preview'), 'gemini 3 pro preview should exist');
+  assert.ok(geminiModels.has('gemini-3-flash-preview'), 'gemini 3 flash preview should exist');
+  assert.ok(geminiModels.has('gemini-2.5-pro'), 'gemini 2.5 pro fallback should exist');
+  assert.ok(geminiModels.has('gemini-2.5-flash'), 'gemini 2.5 flash fallback should exist');
   assert.ok(geminiModels.has('gemini-2.5-flash-lite'), 'gemini 2.5 flash-lite should exist');
-  assert.ok(geminiModels.has('gemini-2.0-flash-lite'), 'gemini 2.0 flash-lite should exist');
+  assert.equal(geminiModels.has('gemini-2.0-flash'), false, 'gemini 2.0 flash should not be present');
+  assert.equal(geminiModels.has('gemini-2.0-flash-lite'), false, 'gemini 2.0 flash-lite should not be present');
 }
 
 function testInteractionValidationFirewall() {
@@ -945,6 +957,229 @@ async function testSandboxProposalRoundtrip() {
         }),
       /Path traversal|Invalid sandbox path|Absolute path/
     );
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function testNeedHumanPromptDirective() {
+  const { buildCachedPrompt } = require(path.join(root, 'extension', 'dist', 'services', 'promptBuilder.js'));
+
+  const orchestratorPrompt = buildCachedPrompt({
+    flowName: 'default',
+    taskInstruction: 'Collect requirements',
+    agent: {
+      id: 'agent:orch',
+      name: 'Orchestrator',
+      role: 'orchestrator',
+      roleLabel: 'Orchestrator',
+      description: 'lead',
+      systemPrompt: '',
+      isOrchestrator: true
+    }
+  }).prompt;
+
+  const workerPrompt = buildCachedPrompt({
+    flowName: 'default',
+    taskInstruction: 'Implement feature',
+    agent: {
+      id: 'agent:worker',
+      name: 'Worker',
+      role: 'coder',
+      roleLabel: 'Coder',
+      description: 'worker',
+      systemPrompt: '',
+      isOrchestrator: false
+    }
+  }).prompt;
+
+  assert.ok(
+    orchestratorPrompt.includes('[NEED_HUMAN: <question>]'),
+    'orchestrator prompt should include NEED_HUMAN format'
+  );
+  assert.ok(
+    orchestratorPrompt.includes('Do not use alternative query tags'),
+    'orchestrator prompt should prohibit alternate human-query formats'
+  );
+  assert.equal(
+    workerPrompt.includes('[NEED_HUMAN: <question>]'),
+    false,
+    'worker prompt must not include NEED_HUMAN directive'
+  );
+}
+
+function testAgentGenerationModelGuidePrompt() {
+  const { BACKEND_PROFILES } = require(path.join(root, 'extension', 'dist', 'services', 'backendProfiles.js'));
+  const { buildAgentGenerationPrompt } = require(path.join(root, 'extension', 'dist', 'services', 'promptBuilder.js'));
+
+  const prompt = buildAgentGenerationPrompt({
+    userPrompt: 'Build a team for coding, review, and research.',
+    existingAgents: [],
+    existingSkills: [],
+    existingMcpServers: [],
+    backendProfiles: BACKEND_PROFILES,
+    useSmartAssignment: true
+  });
+
+  assert.ok(
+    prompt.includes('Role-aware model selection guide'),
+    'generation prompt should include role-aware model guide section'
+  );
+  assert.ok(
+    prompt.includes('Latest frontier agentic coding model.'),
+    'generation prompt should include codex model guidance text'
+  );
+  assert.ok(
+    prompt.includes('Most capable for complex work'),
+    'generation prompt should include claude model guidance text'
+  );
+  assert.ok(
+    prompt.includes('assignedModel must be selected from the listed model guide'),
+    'generation prompt should enforce assignedModel selection rule'
+  );
+}
+
+function testHumanQueryParser() {
+  const { parseHumanQuery } = require(path.join(root, 'extension', 'dist', 'services', 'humanQuery.js'));
+
+  const tagged = parseHumanQuery('Execution blocked. [NEED_HUMAN: Which API key should I use?]');
+  assert.equal(tagged?.question, 'Which API key should I use?');
+
+  const legacy = parseHumanQuery('[NEED_HUMAN] Confirm staging vs production target');
+  assert.equal(legacy?.question, 'Confirm staging vs production target');
+
+  const malformed = parseHumanQuery('[NEED_HUMAN:]');
+  assert.equal(malformed, undefined);
+
+  const none = parseHumanQuery('No human input required');
+  assert.equal(none, undefined);
+}
+
+function testTaskConversationExtractor() {
+  const { extractTaskConversationTurns } = require(
+    path.join(root, 'extension', 'dist', 'services', 'taskConversation.js')
+  );
+
+  const runId = 'run_conversation_test';
+  const taskId = 'task:alpha';
+  const turns = extractTaskConversationTurns(
+    [
+      {
+        ts: 300,
+        runId,
+        flow: 'default',
+        type: 'run_log',
+        message: 'task_conversation_turn',
+        meta: {
+          taskId,
+          role: 'agent',
+          agentId: 'agent:worker',
+          content: 'Here is the implementation result.'
+        }
+      },
+      {
+        ts: 100,
+        runId,
+        flow: 'default',
+        type: 'run_log',
+        message: 'task_conversation_turn',
+        meta: {
+          taskId,
+          role: 'orchestrator',
+          agentId: 'agent:orch',
+          content: 'Implement the parser and include tests.'
+        }
+      },
+      {
+        ts: 120,
+        runId,
+        flow: 'default',
+        type: 'run_log',
+        message: 'task_conversation_turn',
+        meta: {
+          taskId: 'task:other',
+          role: 'orchestrator',
+          content: 'Different task should be filtered.'
+        }
+      },
+      {
+        ts: 140,
+        runId,
+        flow: 'default',
+        type: 'run_log',
+        message: 'task_conversation_turn',
+        meta: {
+          taskId,
+          role: 'agent',
+          content: '   '
+        }
+      }
+    ],
+    runId,
+    taskId
+  );
+
+  assert.equal(turns.length, 2, 'only target task turns with non-empty content should remain');
+  assert.equal(turns[0].role, 'orchestrator');
+  assert.equal(turns[1].role, 'agent');
+  assert.ok(turns[0].timestamp < turns[1].timestamp, 'turns should be sorted by timestamp');
+}
+
+async function testHumanQueryLifecycleRoundtrip() {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcanvas-human-query-'));
+  try {
+    const { appendCollabEvent, readCollabEvents } = require(
+      path.join(root, 'extension', 'dist', 'services', 'collaborationLogger.js')
+    );
+
+    await appendCollabEvent({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      runId: 'run_human_query',
+      event: 'human_query_requested',
+      actor: 'orchestrator',
+      provenance: 'system',
+      payload: {
+        taskId: 'task:qa',
+        question: 'Which deployment target should I use?'
+      }
+    });
+    await appendCollabEvent({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      runId: 'run_human_query',
+      event: 'human_query_answered',
+      actor: 'user',
+      provenance: 'user_input',
+      payload: {
+        taskId: 'task:qa',
+        answer: 'Use staging first.'
+      }
+    });
+    await appendCollabEvent({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      runId: 'run_human_query',
+      event: 'task_resumed_after_human_query',
+      actor: 'orchestrator',
+      provenance: 'system',
+      payload: {
+        taskId: 'task:qa'
+      }
+    });
+
+    const events = await readCollabEvents({
+      workspaceRoot: tmpRoot,
+      flowName: 'default',
+      runId: 'run_human_query'
+    });
+    const eventTypes = events.map((item) => item.event);
+    assert.deepEqual(eventTypes, [
+      'human_query_requested',
+      'human_query_answered',
+      'task_resumed_after_human_query'
+    ]);
+    assert.equal(events[1]?.payload?.answer, 'Use staging first.');
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

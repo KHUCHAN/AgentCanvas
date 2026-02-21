@@ -105,6 +105,8 @@ type RightPanelProps = {
   onChatModifyPlan: (planId: string, modifications: WorkPlanModification[]) => Promise<void>;
   onChatCancelPlan: (planId: string) => Promise<void>;
   onChatStopTask: (taskId: string) => Promise<void>;
+  onChatRespondHumanQuery: (payload: { runId: string; taskId: string; answer: string }) => Promise<void>;
+  onChatOpenTaskDetail: (taskId: string, runId: string) => void;
   onOpenBuildPrompt: () => void;
 };
 
@@ -297,28 +299,37 @@ export default function RightPanel(props: RightPanelProps) {
   if (!props.open) {
     return null;
   }
-  const visibleMode: RightPanelProps["mode"] = props.mode === "chat" ? "chat" : "library";
+  const visibleMode = props.mode;
 
   return (
     <aside className="right-panel">
       <div className="right-panel-tabs" role="tablist" aria-label="Right panel tabs">
         <button
           role="tab"
-          aria-selected={visibleMode === "library"}
+          aria-selected={visibleMode === "library" || visibleMode === "inspector"}
           aria-controls="right-panel-library"
-          className={visibleMode === "library" ? "active" : ""}
+          className={visibleMode === "library" || visibleMode === "inspector" ? "active" : ""}
           onClick={() => props.onModeChange("library")}
         >
           Node Library
         </button>
         <button
           role="tab"
-          aria-selected={visibleMode === "chat"}
-          aria-controls="right-panel-chat"
-          className={visibleMode === "chat" ? "active" : ""}
-          onClick={() => props.onModeChange("chat")}
+          aria-selected={visibleMode === "task"}
+          aria-controls="right-panel-task"
+          className={visibleMode === "task" ? "active" : ""}
+          onClick={() => props.onModeChange("task")}
         >
-          AI Prompt
+          Task
+        </button>
+        <button
+          role="tab"
+          aria-selected={visibleMode === "run"}
+          aria-controls="right-panel-run"
+          className={visibleMode === "run" ? "active" : ""}
+          onClick={() => props.onModeChange("run")}
+        >
+          Run History
         </button>
       </div>
 
@@ -620,12 +631,14 @@ export default function RightPanel(props: RightPanelProps) {
             onModifyPlan={props.onChatModifyPlan}
             onCancelPlan={props.onChatCancelPlan}
             onStopTask={props.onChatStopTask}
+            onRespondHumanQuery={props.onChatRespondHumanQuery}
+            onOpenTaskDetail={props.onChatOpenTaskDetail}
             onOpenBuildPrompt={props.onOpenBuildPrompt}
           />
         </div>
       )}
 
-      {props.mode === "inspector" && (
+      {visibleMode === "inspector" && (
         <div className="panel-content" id="right-panel-inspector" role="tabpanel">
           <div className="view-toggle inspector-subtabs" role="tablist" aria-label="Inspector tabs">
             <button
@@ -815,7 +828,7 @@ export default function RightPanel(props: RightPanelProps) {
         </div>
       )}
 
-      {props.mode === "task" && (
+      {visibleMode === "task" && (
         <TaskPanel
           agents={props.snapshot?.agents ?? []}
           tasks={props.tasks}
@@ -827,7 +840,7 @@ export default function RightPanel(props: RightPanelProps) {
         />
       )}
 
-      {props.mode === "run" && (
+      {visibleMode === "run" && (
         <RunPanel
           activeFlowName={props.activeFlowName}
           selectedNodeId={props.selectedScheduleTaskId ?? props.selectedNode?.id}

@@ -25,7 +25,6 @@ import {
 import { detectAllCliBackends, pickPromptBackend, testBackend } from "./services/cliDetector";
 import { executeCliPrompt } from "./services/cliExecutor";
 import { buildAgentHomeDir } from "./services/agentEnvService";
-import { runAndLogBackendProbes } from "./services/backendProbeService";
 import { assignBackends } from "./services/backendAssigner";
 import {
   BACKEND_PROFILES,
@@ -39,6 +38,7 @@ import {
 import {
   fetchClaudeQuotaSnapshot,
   fetchCodexQuotaSnapshot,
+  getCachedClaudeQuotaSnapshot,
   fetchGeminiQuotaSnapshot,
   invalidateAllQuotaCaches
 } from "./services/claudeQuotaPoller";
@@ -61,6 +61,7 @@ import { exists, getHomeDir } from "./services/pathUtils";
 import { appendPromptHistory, findPromptHistory, markPromptHistoryApplied, readPromptHistory, removePromptHistory } from "./services/promptHistory";
 import { buildAgentGenerationPrompt, buildCachedPrompt } from "./services/promptBuilder";
 import { applyProposal, createProposal } from "./services/proposalService";
+import { parseHumanQuery } from "./services/humanQuery";
 import { resolveAgentRuntime } from "./services/agentRuntimeService";
 import { clearPin, getPin, setPin } from "./services/pinStore";
 import {
@@ -74,6 +75,7 @@ import { resolveModel } from "./services/modelRouter";
 import { TokenTracker } from "./services/tokenTracker";
 import { calculateUsageCost } from "./services/costCalculator";
 import { buildContextPacket } from "./services/contextPacker";
+import { extractTaskConversationTurns } from "./services/taskConversation";
 import { extractMemories } from "./services/memoryExtractor";
 import {
   assertDirectedCommunicationAllowed,
@@ -193,14 +195,22 @@ class AgentCanvasPanel {
   private demoRunTimers = new Map<string, NodeJS.Timeout>();
   private activeRunStops = new Map<string, () => void>();
   private activeRunFlowById = new Map<string, string>();
-  /** VS Code Output Channel that shows live backend probe results. Created on first use. */
-  private probeOutputChannel: vscode.OutputChannel | undefined;
   /**
    * Tracks tasks that are blocked waiting for a human response.
-   * Key = taskId, value = { question, runId }.
+   * Key = taskId, value = { question, runId, createdAt, ... }.
    * Cleared when the user provides an answer via CHAT_SEND or HUMAN_QUERY_RESPONSE.
    */
-  private pendingHumanQueryByTaskId = new Map<string, { question: string; runId: string }>();
+  private pendingHumanQueryByTaskId = new Map<
+    string,
+    {
+      question: string;
+      runId: string;
+      createdAt: number;
+      agentId?: string;
+      nodeId?: string;
+      messageId?: string;
+    }
+  >();
 
   private constructor(panel: vscode.WebviewPanel, extensionContext: vscode.ExtensionContext) {
     this.panel = panel;
@@ -574,25 +584,9 @@ class AgentCanvasPanel {
       }
       case "GENERATE_AGENT_STRUCTURE": {
         try {
-          // ── Fresh backend probes on every Rebuild ──────────────────────────
-          // Invalidate stale caches so the probe populates fresh results.
-          invalidateBackendModelCatalogCache();
-          invalidateAllQuotaCaches();
-          if (!this.probeOutputChannel) {
-            this.probeOutputChannel = vscode.window.createOutputChannel("AgentCanvas: Backend Probes");
-          }
           const backends = await this.detectCliBackends();
-          // Run one session probe per backend in parallel (model + status in a
-          // single interactive session per CLI).  Gemini needs up to 28 s to
-          // initialise; cap the overall wait at 35 s so we don't block forever
-          // when a CLI is simply unavailable.
-          await Promise.race([
-            runAndLogBackendProbes(backends, this.getWorkspaceRoot(), this.probeOutputChannel),
-            new Promise<void>((resolve) => { setTimeout(resolve, 35_000); })
-          ]);
-          this.probeOutputChannel.show(/* preserveFocus */ true);
-          // ── End probe — caches are now populated with confirmed models ─────
-
+          void this.publishBackendModelsUpdate(backends).catch(() => undefined);
+          void this.publishBackendQuotaUpdate(backends).catch(() => undefined);
           const snapshot = await this.ensureSnapshot();
           const usageTracker = this.getBackendUsageTracker();
           const availableCanonical = listAvailableCanonicalBackends(backends);
@@ -610,7 +604,7 @@ class AgentCanvasPanel {
           });
           let backend = pickPromptBackend(backends, message.payload.backendId ?? "auto", usageSummaries);
           if ((message.payload.backendId ?? "auto") === "auto") {
-            const quota = await fetchClaudeQuotaSnapshot(backends).catch(() => undefined);
+            const quota = getCachedClaudeQuotaSnapshot();
             if (quota) {
               const recommended = selectBackendForTask(
                 [
@@ -655,6 +649,7 @@ class AgentCanvasPanel {
             existingAgents: message.payload.includeExistingAgents ? snapshot.agents : [],
             existingSkills: message.payload.includeExistingSkills ? snapshot.skills : [],
             existingMcpServers: message.payload.includeExistingMcpServers ? snapshot.mcpServers : [],
+            backendProfiles: BACKEND_PROFILES,
             useSmartAssignment,
             preferredBackends,
             budgetConstraint: message.payload.budgetConstraint,
@@ -824,11 +819,32 @@ class AgentCanvasPanel {
         const snapshot = await this.ensureSnapshot();
         const runId = this.resolveMostRecentRunId();
 
-        // If a task is blocked waiting for human input, treat this message as the answer
+        // If a task is blocked waiting for human input, treat this message as the answer.
+        // For safety, auto-mapping only works when exactly one pending query exists for this run.
         if (runId && this.pendingHumanQueryByTaskId.size > 0) {
-          const pendingEntry = [...this.pendingHumanQueryByTaskId.entries()].find(
-            ([, v]) => v.runId === runId
+          const pendingEntries = [...this.pendingHumanQueryByTaskId.entries()].filter(
+            ([, value]) => value.runId === runId
           );
+          if (pendingEntries.length > 1) {
+            const ambiguityMessage = createChatMessage(
+              "orchestrator",
+              [
+                {
+                  kind: "text",
+                  text: `There are ${pendingEntries.length} pending human queries. Please answer from a specific task detail card so I can route your response correctly.`
+                }
+              ],
+              { runId }
+            );
+            this.appendChatMessage(ambiguityMessage, true);
+            return {
+              ok: true,
+              action: "human_query_ambiguous",
+              pendingTaskIds: pendingEntries.map(([taskId]) => taskId)
+            };
+          }
+
+          const pendingEntry = pendingEntries[0];
           if (pendingEntry) {
             const [blockedTaskId] = pendingEntry;
             this.pendingHumanQueryByTaskId.delete(blockedTaskId);
@@ -839,10 +855,65 @@ class AgentCanvasPanel {
               meta: { ...(existingTask?.meta ?? {}), humanAnswer: content }
             });
             const ackMsg = createChatMessage("orchestrator", [
-              { kind: "text", text: `Understood — resuming the blocked task with your answer.` }
+              { kind: "text", text: "Understood. I will resume the blocked task with your answer." }
             ], { runId });
             this.appendChatMessage(ackMsg, true);
-            return { ok: true, action: "human_query_answered" };
+
+            const flowName = this.activeRunFlowById.get(runId) ?? "default";
+            const answerPayload = {
+              taskId: blockedTaskId,
+              answer: content
+            };
+            const answeredAt = Date.now();
+            await appendCollabEvent({
+              workspaceRoot,
+              flowName,
+              runId,
+              event: "human_query_answered",
+              actor: "user",
+              provenance: "user_input",
+              payload: answerPayload
+            });
+            this.postMessage({
+              type: "COLLAB_EVENT",
+              payload: {
+                event: "human_query_answered",
+                runId,
+                flowName,
+                actor: "user",
+                provenance: "user_input",
+                data: answerPayload,
+                ts: answeredAt
+              }
+            });
+
+            const resumedPayload = {
+              taskId: blockedTaskId
+            };
+            const resumedAt = Date.now();
+            await appendCollabEvent({
+              workspaceRoot,
+              flowName,
+              runId,
+              event: "task_resumed_after_human_query",
+              actor: "orchestrator",
+              provenance: "system",
+              payload: resumedPayload
+            });
+            this.postMessage({
+              type: "COLLAB_EVENT",
+              payload: {
+                event: "task_resumed_after_human_query",
+                runId,
+                flowName,
+                actor: "orchestrator",
+                provenance: "system",
+                data: resumedPayload,
+                ts: resumedAt
+              }
+            });
+
+            return { ok: true, action: "human_query_answered", taskId: blockedTaskId };
           }
         }
 
@@ -1368,14 +1439,102 @@ class AgentCanvasPanel {
       }
       case "HUMAN_QUERY_RESPONSE": {
         const { runId, taskId, answer } = message.payload;
+        const normalizedAnswer = answer.trim();
+        if (!normalizedAnswer) {
+          throw new Error("Human query answer is empty");
+        }
+        const workspaceRoot = this.getWorkspaceRoot();
         const existing = this.scheduleService.getTasks(runId).find((t) => t.id === taskId);
         this.pendingHumanQueryByTaskId.delete(taskId);
         this.scheduleService.patchTask(runId, taskId, {
           status: "ready",
           blocker: undefined,
-          meta: { ...(existing?.meta ?? {}), humanAnswer: answer }
+          meta: { ...(existing?.meta ?? {}), humanAnswer: normalizedAnswer }
+        });
+        this.appendChatMessage(
+          createChatMessage(
+            "user",
+            [{ kind: "text", text: normalizedAnswer }],
+            { runId, taskIds: [taskId] }
+          ),
+          true
+        );
+        this.appendChatMessage(
+          createChatMessage(
+            "orchestrator",
+            [{ kind: "text", text: "Understood. I will resume the blocked task with your answer." }],
+            { runId, taskIds: [taskId] }
+          ),
+          true
+        );
+        const flowName = this.activeRunFlowById.get(runId) ?? "default";
+        const answerPayload = {
+          taskId,
+          answer: normalizedAnswer
+        };
+        const answeredAt = Date.now();
+        await appendCollabEvent({
+          workspaceRoot,
+          flowName,
+          runId,
+          event: "human_query_answered",
+          actor: "user",
+          provenance: "user_input",
+          payload: answerPayload
+        });
+        this.postMessage({
+          type: "COLLAB_EVENT",
+          payload: {
+            event: "human_query_answered",
+            runId,
+            flowName,
+            actor: "user",
+            provenance: "user_input",
+            data: answerPayload,
+            ts: answeredAt
+          }
+        });
+        const resumedPayload = { taskId };
+        const resumedAt = Date.now();
+        await appendCollabEvent({
+          workspaceRoot,
+          flowName,
+          runId,
+          event: "task_resumed_after_human_query",
+          actor: "orchestrator",
+          provenance: "system",
+          payload: resumedPayload
+        });
+        this.postMessage({
+          type: "COLLAB_EVENT",
+          payload: {
+            event: "task_resumed_after_human_query",
+            runId,
+            flowName,
+            actor: "orchestrator",
+            provenance: "system",
+            data: resumedPayload,
+            ts: resumedAt
+          }
         });
         return { ok: true };
+      }
+      case "GET_TASK_CONVERSATION": {
+        const { runId, flowName, taskId } = message.payload;
+        const events = await loadRunEvents({
+          workspaceRoot: this.getWorkspaceRoot(),
+          flowName,
+          runId
+        });
+        const turns = extractTaskConversationTurns(events, runId, taskId);
+        this.postMessage({
+          type: "TASK_CONVERSATION",
+          payload: {
+            taskId,
+            turns
+          }
+        });
+        return { ok: true, taskId, turnCount: turns.length };
       }
       case "GET_TASK_DETAIL": {
         const { runId, flowName, taskId, nodeId } = message.payload;
@@ -1387,8 +1546,14 @@ class AgentCanvasPanel {
         // Filter to events relevant to this task or node
         const filtered = events.filter((e) => {
           const ev = e as unknown as Record<string, unknown>;
+          const payload = ev["payload"] as Record<string, unknown> | undefined;
+          const meta = ev["meta"] as Record<string, unknown> | undefined;
+          const payloadTaskId = typeof payload?.["taskId"] === "string" ? String(payload["taskId"]) : undefined;
+          const metaTaskId = typeof meta?.["taskId"] === "string" ? String(meta["taskId"]) : undefined;
           return (
             ev["taskId"] === taskId ||
+            payloadTaskId === taskId ||
+            metaTaskId === taskId ||
             ev["nodeId"] === (nodeId ?? taskId) ||
             (Array.isArray(ev["taskIds"]) && (ev["taskIds"] as string[]).includes(taskId))
           );
@@ -3220,6 +3385,27 @@ class AgentCanvasPanel {
         if (pendingHumanAnswer) {
           prompt = `${prompt}\n\n[HUMAN_ANSWER]: ${pendingHumanAnswer}`;
         }
+        await appendRunEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          event: {
+            ts: Date.now(),
+            flow: input.flowName,
+            runId: input.runId,
+            type: "run_log",
+            message: "task_conversation_turn",
+            actor: orchestratorId,
+            provenance: "orchestrator_to_worker",
+            meta: {
+              taskId: nextTask.id,
+              role: "orchestrator",
+              agentId: nextTask.agentId,
+              backendId: backend.id,
+              model: modelId,
+              content: prompt
+            }
+          }
+        });
         const runtimeOptions =
           taskAgent?.runtime?.kind === "cli"
             ? taskAgent.runtime
@@ -3276,6 +3462,14 @@ class AgentCanvasPanel {
               type: "CHAT_STREAM_CHUNK",
               payload: {
                 messageId: streamMessageId,
+                chunk: event.chunk
+              }
+            });
+            // Also stream to TaskDetailModal for real-time task output
+            this.postMessage({
+              type: "TASK_STREAM_CHUNK",
+              payload: {
+                taskId: nextTask.id,
                 chunk: event.chunk
               }
             });
@@ -3338,21 +3532,81 @@ class AgentCanvasPanel {
           config: cacheConfig
         });
 
-        // Detect human-in-the-loop query: agent outputs [NEED_HUMAN: <question>]
-        const humanQueryMatch = result.output.match(/\[NEED_HUMAN:\s*([\s\S]*?)\]/);
-        if (humanQueryMatch) {
-          const question = humanQueryMatch[1].trim();
+        const agentTurnContent = result.success
+          ? result.output
+          : (result.output.trim() || result.error || "Task execution failed");
+        await appendRunEvent({
+          workspaceRoot,
+          flowName: input.flowName,
+          event: {
+            ts: Date.now(),
+            flow: input.flowName,
+            runId: input.runId,
+            type: "run_log",
+            message: "task_conversation_turn",
+            actor: taskAgent?.id ?? nextTask.agentId,
+            provenance: "system",
+            meta: {
+              taskId: nextTask.id,
+              role: "agent",
+              agentId: taskAgent?.id ?? nextTask.agentId,
+              backendId: backend.id,
+              model: modelId,
+              content: agentTurnContent
+            }
+          }
+        });
+
+        // Detect human-in-the-loop query only from orchestrator output.
+        const canRequestHumanInput = Boolean(taskAgent?.isOrchestrator || nextTask.agentId === orchestratorId);
+        const parsedHumanQuery = canRequestHumanInput ? parseHumanQuery(result.output) : undefined;
+        if (parsedHumanQuery) {
+          const question = parsedHumanQuery.question;
           this.scheduleService.patchTask(input.runId, nextTask.id, {
             status: "blocked",
             blocker: { kind: "input", message: question }
           });
-          this.pendingHumanQueryByTaskId.set(nextTask.id, { question, runId: input.runId });
+          this.pendingHumanQueryByTaskId.set(nextTask.id, {
+            question,
+            runId: input.runId,
+            createdAt: Date.now(),
+            agentId: taskAgent?.id ?? nextTask.agentId,
+            nodeId: String(nextTask.meta?.nodeId ?? nextTask.id),
+            messageId: streamMessageId
+          });
           const queryMessage = createChatMessage(
             "orchestrator",
             [{ kind: "human_query", taskId: nextTask.id, question, runId: input.runId }],
             { runId: input.runId, taskIds: [nextTask.id], backendId: String(backend.id) }
           );
           this.appendChatMessage(queryMessage, true);
+          const queryPayload = {
+            taskId: nextTask.id,
+            question,
+            agentId: taskAgent?.id ?? nextTask.agentId
+          };
+          const queryTs = Date.now();
+          await appendCollabEvent({
+            workspaceRoot,
+            flowName: input.flowName,
+            runId: input.runId,
+            event: "human_query_requested",
+            actor: "orchestrator",
+            provenance: "system",
+            payload: queryPayload
+          });
+          this.postMessage({
+            type: "COLLAB_EVENT",
+            payload: {
+              event: "human_query_requested",
+              runId: input.runId,
+              flowName: input.flowName,
+              actor: "orchestrator",
+              provenance: "system",
+              data: queryPayload,
+              ts: queryTs
+            }
+          });
           return;
         }
 

@@ -1,8 +1,8 @@
-# AgentCanvas Workflow — 프롬프트 생성, 스케줄 실행, MVP 스펙
+# Open Claw Workflow — 프롬프트 생성, 스케줄 실행, MVP 스펙
 
 **Date**: 2026-02-19
 
-**AgentCanvas는 VS Code 안에서 "멀티 런타임(Claude/Gemini/Codex/OpenClaw) 멀티에이전트"를 설계하고, 실행/디버깅/재현까지 하는 Agent IDE입니다.**
+**Open Claw는 VS Code 안에서 "멀티 런타임(Claude/Gemini/Codex/OpenClaw) 멀티에이전트"를 설계하고, 실행/디버깅/재현까지 하는 Agent IDE입니다.**
 
 ---
 
@@ -63,7 +63,7 @@
 
 > 용어 정의는 FRAMEWORK.md §0 "핵심 용어 정의" 참조
 
-AgentCanvas에서 사용자의 작업 요청이 실행되는 전체 흐름:
+Open Claw에서 사용자의 작업 요청이 실행되는 전체 흐름:
 
 ```
 [STEP 1] 설계 단계 (정적)
@@ -1034,7 +1034,7 @@ export function computeSchedule(input: ComputeScheduleInput): { updatedIds: stri
 
 ### 3.5 Extension 구현: TaskScheduleService
 
-AgentCanvas는 extension이 backend 역할을 하고 webview에 UI를 띄웁니다. 따라서 **Extension이 스케줄 상태의 권위(authoritative state)**를 가져야 합니다.
+Open Claw는 extension이 backend 역할을 하고 webview에 UI를 띄웁니다. 따라서 **Extension이 스케줄 상태의 권위(authoritative state)**를 가져야 합니다.
 
 #### 새 파일/모듈 구조(추천)
 
@@ -1087,7 +1087,7 @@ class ScheduleService {
 
 ### 3.6 Webview UI 구현: React Flow로 "Swimlane Timeline" 만들기
 
-AgentCanvas webview는 React + React Flow 기반입니다. Schedule Canvas도 React Flow를 그대로 씁니다.
+Open Claw webview는 React + React Flow 기반입니다. Schedule Canvas도 React Flow를 그대로 씁니다.
 
 #### 좌표계 (이게 핵심)
 
@@ -1256,12 +1256,12 @@ extension이 JSON 스키마 검증 + DAG 검증 통과 시 schedule 생성
 - [ ] ScheduleService 추가 (in-memory + 이벤트 emit)
 - [ ] webview 메시지 핸들러에: subscribe/unsubscribe/snapshot/pin/move 구현
 - [ ] "테스트용" 커맨드 하나 추가:
-  - AgentCanvas: Demo Schedule Run
+  - Open Claw: Demo Schedule Run
   - → 10개 task 만들어서 3개 agent lane에 배치 + 1초마다 progress 업데이트
 
 #### Webview 단계
 
-- [ ] 오른쪽 패널 탭에 Schedule 추가 (AgentCanvas는 패널/탭 구조가 이미 있음)
+- [ ] 오른쪽 패널 탭에 Schedule 추가 (Open Claw는 패널/탭 구조가 이미 있음)
 - [ ] ScheduleView.tsx:
   - ReactFlow instance
   - LaneNode / TaskNode 등록
@@ -1672,7 +1672,7 @@ UI 규칙:
 
 ### Phase 6 — OpenClaw 연동
 - [ ] OpenClaw Workspace Provider (읽기)
-- [ ] AgentCanvas as "OpenClaw Workspace Editor"
+- [ ] Open Claw as "OpenClaw Workspace Editor"
 - [ ] OpenClaw CLI Runtime (실행)
 - [ ] OpenClaw Gateway (ws://) 연결 (고급)
 
@@ -2221,4 +2221,4 @@ agent-studio/
 
 ---
 
-**This consolidated WORKFLOW.md serves as the comprehensive specification for AgentCanvas development, integrating all aspects of prompt-to-agent generation, schedule canvas visualization, MVP feature set, and technical architecture.**
+**This consolidated WORKFLOW.md serves as the comprehensive specification for Open Claw development, integrating all aspects of prompt-to-agent generation, schedule canvas visualization, MVP feature set, and technical architecture.**

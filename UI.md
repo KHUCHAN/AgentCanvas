@@ -1,7 +1,7 @@
-# AgentCanvas UI — 브랜딩, 컴포넌트, 디자인 시스템
+# Open Claw UI — 브랜딩, 컴포넌트, 디자인 시스템
 
 **작성일:** 2026-02-19
-**목적:** AgentCanvas 제품의 브랜딩 가이드, UI 컴포넌트 아키텍처, CSS 디자인 시스템, 디자인 검증 결과를 통합 관리
+**목적:** Open Claw 제품의 브랜딩 가이드, UI 컴포넌트 아키텍처, CSS 디자인 시스템, 디자인 검증 결과를 통합 관리
 
 ---
 
@@ -9,13 +9,13 @@
 
 ### 1.1 브랜딩 현황 및 변경 사항
 
-코드 전체에서 혼용되고 있는 4가지 이름을 **"AgentCanvas"**로 통일합니다:
+코드 전체에서 혼용되고 있는 4가지 이름을 **"Open Claw"**로 통일합니다:
 
 | 현재 사용명 | 위치 | 변경 대상 |
 |-----------|------|----------|
 | `agent-studio` | package.json `name`, VS Code command prefix, zipPack manifest, launch.json, tasks.json | `agent-canvas` |
-| `Agent Studio` | package.json commands 타이틀, mvp.md, instruction 문서들 | `AgentCanvas` |
-| `Open Canvas` | package.json `displayName`, LeftSidebar 브랜드, index.html title, extension.ts 패널/에러 메시지, fallback HTML | `AgentCanvas` |
+| `Agent Studio` | package.json commands 타이틀, mvp.md, instruction 문서들 | `Open Claw` |
+| `Open Canvas` | package.json `displayName`, LeftSidebar 브랜드, index.html title, extension.ts 패널/에러 메시지, fallback HTML | `Open Claw` |
 | `Nano Banana` | 로고 이미지 (`nano_banana_logo.png`), alt 텍스트 | 교체 필요 |
 
 #### 변경이 필요한 파일 전체 목록 (25개 지점)
@@ -23,30 +23,30 @@
 | 파일 | 행 | 현재 값 | 변경 값 |
 |-----|-----|--------|--------|
 | `package.json` | 2 | `"name": "agent-studio"` | `"name": "agent-canvas"` |
-| `package.json` | 3 | `"displayName": "Open Canvas"` | `"displayName": "AgentCanvas"` |
-| `package.json` | 4 | description 내 "Agent Studio" | "AgentCanvas" |
+| `package.json` | 3 | `"displayName": "Open Canvas"` | `"displayName": "Open Claw"` |
+| `package.json` | 4 | description 내 "Agent Studio" | "Open Claw" |
 | `package.json` | 14 | `"onCommand:agentStudio.open"` | `"onCommand:agentCanvas.open"` |
 | `package.json` | 20 | `"command": "agentStudio.open"` | `"command": "agentCanvas.open"` |
-| `package.json` | 21 | `"title": "Agent Studio: Open"` | `"title": "AgentCanvas: Open"` |
+| `package.json` | 21 | `"title": "Agent Studio: Open"` | `"title": "Open Claw: Open"` |
 | `package.json` | 24 | `"command": "agentStudio.refresh"` | `"command": "agentCanvas.refresh"` |
-| `package.json` | 25 | `"title": "Agent Studio: Refresh"` | `"title": "AgentCanvas: Refresh"` |
+| `package.json` | 25 | `"title": "Agent Studio: Refresh"` | `"title": "Open Claw: Refresh"` |
 | `package.json` | 30~40 | `"agentStudio.*"` config keys | `"agentCanvas.*"` |
 | `extension.ts` | 29 | `"agentStudio.open"` | `"agentCanvas.open"` |
 | `extension.ts` | 35 | `"agentStudio.refresh"` | `"agentCanvas.refresh"` |
 | `extension.ts` | 47 | `viewType = "agentStudio.panel"` | `"agentCanvas.panel"` |
-| `extension.ts` | 76,81 | `"Open Canvas operation failed"` | `"AgentCanvas operation failed"` |
-| `extension.ts` | 98 | `"Open Canvas"` (패널 타이틀) | `"AgentCanvas"` |
+| `extension.ts` | 76,81 | `"Open Canvas operation failed"` | `"Open Claw operation failed"` |
+| `extension.ts` | 98 | `"Open Canvas"` (패널 타이틀) | `"Open Claw"` |
 | `extension.ts` | 269,286 | `getConfiguration("agentStudio")` | `"agentCanvas"` |
-| `extension.ts` | 338 | `<h2>Open Canvas</h2>` | `<h2>AgentCanvas</h2>` |
+| `extension.ts` | 338 | `<h2>Open Canvas</h2>` | `<h2>Open Claw</h2>` |
 | `extension.ts` | 654 | `agentStudio.notes:` storage key | `agentCanvas.notes:` |
 | `zipPack.ts` | 48 | `"agent-studio-pack"` | `"agent-canvas-pack"` |
-| `index.html` | 6 | `<title>Open Canvas</title>` | `<title>AgentCanvas</title>` |
+| `index.html` | 6 | `<title>Open Canvas</title>` | `<title>Open Claw</title>` |
 | `LeftSidebar.tsx` | 2 | `import logo from "../assets/nano_banana_logo.png"` | 새 로고 파일로 변경 |
-| `LeftSidebar.tsx` | 23 | `alt="Open Canvas Logo"` | `alt="AgentCanvas Logo"` |
-| `LeftSidebar.tsx` | 24 | `Open Canvas` | `AgentCanvas` |
+| `LeftSidebar.tsx` | 23 | `alt="Open Canvas Logo"` | `alt="Open Claw Logo"` |
+| `LeftSidebar.tsx` | 24 | `Open Canvas` | `Open Claw` |
 | `.vscode/tasks.json` | 5 | `"agent-studio: build"` | `"agent-canvas: build"` |
-| `.vscode/launch.json` | 5,15 | `"Run Agent Studio Extension"` 등 | `"AgentCanvas"` |
-| `README.md` | 전체 | "Agent Studio" 언급 | "AgentCanvas" |
+| `.vscode/launch.json` | 5,15 | `"Run Agent Studio Extension"` 등 | `"Open Claw"` |
+| `README.md` | 전체 | "Agent Studio" 언급 | "Open Claw" |
 
 ### 1.2 디자인 컨셉
 
@@ -90,7 +90,7 @@
 
 **AI 이미지 생성 프롬프트:**
 ```
-A modern, minimalist logo for a developer tool called "AgentCanvas".
+A modern, minimalist logo for a developer tool called "Open Claw".
 
 The logo combines two visual concepts:
 1. A stylized canvas/artboard shape — a rounded rectangle with subtle grid dots inside, representing a node-based visual editor workspace
@@ -265,7 +265,7 @@ Lucide React 아이콘 라이브러리 사용을 권장합니다:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 🟢 AgentCanvas    [Kanban│Graph│Schedule]              ⚙ Settings  ⌘K │
+│ 🟢 Open Claw    [Kanban│Graph│Schedule]              ⚙ Settings  ⌘K │
 ├────────────────────────────┬───────────────────────────┬────────────────┤
 │                            │                           │                │
 │  [+] [+ Agent] [+ Rule]   │                           │  Right Panel   │
@@ -680,7 +680,7 @@ BRANDING_GUIDE.md에 정의된 디자인 시스템 기준:
 
 ---
 
-**이 문서는 AgentCanvas 프로젝트의 브랜딩, UI 컴포넌트 아키텍처, CSS 디자인 시스템, 디자인 검증 결과를 통합 관리하는 마스터 가이드입니다.**
+**이 문서는 Open Claw 프로젝트의 브랜딩, UI 컴포넌트 아키텍처, CSS 디자인 시스템, 디자인 검증 결과를 통합 관리하는 마스터 가이드입니다.**
 
 ---
 
@@ -888,18 +888,29 @@ Backend 선택 시 Model 드롭다운이 해당 Backend의 모델 목록으로 �
 
 ---
 
-### 6.7 2차 개정 체크리스트
+6.7 2차 개정 체크리스트 (검증 결과)
 
 #### 컴포넌트 변경
-- [ ] `TeamPanel.tsx` — `+ Skill` 버튼 추가 (onCreateSkill prop 포함)
-- [ ] `RightPanel.tsx` — `newSkill` 섹션 전체 제거
-- [ ] `AgentCreationModal.tsx` — Backend, Model 선택 필드 추가
-- [ ] `ChatInput.tsx` — model input → select 전환, orchestratorLocked prop
+- [x] `TeamPanel.tsx` — `+ Skill` 버튼 추가 ✅
+- [x] `RightPanel.tsx` — `newSkill` 섹션 전체 제거 ✅
+- [x] `AgentCreationModal.tsx` — Backend, Model 선택 필드 추가 ✅
+- [x] `ChatInput.tsx` — model input → select 전환, orchestratorLocked prop ✅
 
 #### 레이아웃 변경
-- [ ] `styles.css` — `canvas-controls` bottom 값 조정 (90px 이상)
-- [ ] `styles.css` — `build-prompt-bar` bottom 값 조정 (16px)
-- [ ] `GraphView.tsx` — `autoLayoutSignal` prop 처리 useEffect 추가
+- [x] `styles.css` — `canvas-controls` bottom 값 조정 ✅
+- [x] `styles.css` — `build-prompt-bar` bottom 값 조정 ✅
+- [x] `GraphView.tsx` — `autoLayoutSignal` prop 처리 useEffect 추가 ✅
 
-#### 신규 파일
-- [ ] `webview-ui/src/utils/modelOptions.ts` — backend별 모델 목록 상수
+---
+
+## 7. 최신 UI 업데이트 내역 (2026-02-20)
+
+### 7.1 StatusBar 가독성 개선
+- Agents, Tasks, Cost, Context, Backends 정보를 섹션별로 분리하여 한눈에 파악 가능하도록 개선했습니다.
+- `status-bar-separator`를 추가하여 시각적 복잡도를 낮췄습니다.
+
+### 7.2 RightPanel 탭 최적화
+- **Node Library / Task / Run History** 3탭 체제로 고정하여 핵심 워크플로우를 단순화했습니다.
+- `AI Prompt` 탭을 제거하고 캔버스 하단 `BuildPromptBar`로 기능을 통합했습니다.
+- 선택된 노드/엣지 종류에 따라 Library와 Inspector 섹션이 겹치지 않도록 렌더링 로직을 수정했습니다.
+

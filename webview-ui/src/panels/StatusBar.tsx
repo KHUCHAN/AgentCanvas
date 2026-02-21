@@ -35,24 +35,34 @@ export default function StatusBar(props: StatusBarProps) {
 
   return (
     <div className="status-bar">
-      <span>Skills {props.skills}</span>
-      <span>Rules {props.rules}</span>
-      <span>Errors {props.errors}</span>
-      <span>Warnings {props.warnings}</span>
-      <span>Focus {props.focus}</span>
-      <span>Agents {props.agents}</span>
-      <span>Tasks {props.tasks}</span>
-      <span>Done {props.done}</span>
-      <span>Failed {props.failed}</span>
-      <span>Cost ${props.costUsd.toFixed(3)} ({Math.round(props.cacheSavedRate * 100)}% saved)</span>
-      <span className={`context-meter ${props.contextState}`}>
-        Context {formatTokenCount(props.contextUsed)}/{formatTokenCount(props.contextThreshold)}
-      </span>
-      <span>Backends {usageText || "-"}</span>
-      {quotaText && <span className="quota-meter">{quotaText}</span>}
-      <span>Flow {props.flowName}</span>
-      <span>View {props.canvasView}</span>
-      <span>Run {props.runId ?? "-"}</span>
+      <div className="status-bar-section">
+        <span>Agents {props.agents}</span>
+        <span>Tasks {props.tasks}</span>
+        <span>Done {props.done}</span>
+        {props.failed > 0 && <span className="status-error">Failed {props.failed}</span>}
+      </div>
+      <div className="status-bar-separator" />
+      <div className="status-bar-section">
+        <span>Cost ${props.costUsd.toFixed(3)}</span>
+        <span className="muted">({Math.round(props.cacheSavedRate * 100)}% saved)</span>
+      </div>
+      <div className="status-bar-separator" />
+      <div className="status-bar-section">
+        <span className={`context-meter ${props.contextState}`}>
+          Context {formatTokenCount(props.contextUsed)}/{formatTokenCount(props.contextThreshold)}
+        </span>
+      </div>
+      <div className="status-bar-separator" />
+      <div className="status-bar-section">
+        <span>Backends {usageText || "-"}</span>
+        {quotaText && <span className="quota-meter">{quotaText}</span>}
+      </div>
+      <div className="status-bar-fill" />
+      <div className="status-bar-section">
+        <span>{props.flowName}</span>
+        <span className="muted">·</span>
+        <span>{props.canvasView}</span>
+      </div>
       {props.showBuildNew && (
         <button type="button" className="status-build-new" onClick={props.onBuildNew}>
           Build New

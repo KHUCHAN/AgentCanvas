@@ -107,7 +107,10 @@ export default function RunPanel(props: RunPanelProps) {
           event.type === "proposal_reviewed" ||
           event.type === "proposal_applied" ||
           event.type === "proposal_rejected" ||
-          event.type === "announce"
+          event.type === "announce" ||
+          event.type === "human_query_requested" ||
+          event.type === "human_query_answered" ||
+          event.type === "task_resumed_after_human_query"
         )
         .slice(-50),
     [props.runEvents]

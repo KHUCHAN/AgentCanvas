@@ -21,7 +21,7 @@ Right Panel Tabs:
 - Run 탭: 실행 로그 나열 (RunEvents 스트리밍)
 - Inspector 탭: 노드 상세 (AgentDetailModal과 중복)
 - 사용자 입장: 4개 탭 전환하며 작업 → 비직관적
-- Task vs Run 차이 불명확 (CODE_REVIEW2 USR-5)
+- Task vs Run 차이 불명확
 ```
 
 ### 1.2 변경 구조
@@ -382,11 +382,16 @@ export interface WorkPlanItem {
   └── Review — 실행 없이 분석만
 
 [∨ Claude ▸ sonnet] : Orchestrator 백엔드 + 모델
-  ├── Claude ▸ sonnet-4.5
-  ├── Claude ▸ haiku-4.5
-  ├── Codex ▸ codex-1
-  ├── Gemini ▸ 2.5-pro
-  └── Gemini ▸ 2.5-flash
+  ├── Claude ▸ claude-opus-4-6 (default)
+  ├── Claude ▸ claude-sonnet-4-6
+  ├── Claude ▸ claude-haiku-4-5-20251001
+  ├── Codex ▸ gpt-5.3-codex
+  ├── Codex ▸ gpt-5.3-codex-spark
+  ├── Gemini ▸ gemini-3-pro-preview
+  ├── Gemini ▸ gemini-3-flash-preview
+  ├── Gemini ▸ gemini-2.5-pro
+  ├── Gemini ▸ gemini-2.5-flash
+  └── Gemini ▸ gemini-2.5-flash-lite
 ```
 
 ---
@@ -1098,7 +1103,7 @@ Orchestrator가 Task를 설계하다가 "이 작업을 처리할 Agent가 팀에
 │                                               │
 │ 새 Agent: "DB Engineer"                       │
 │ 역할: coder (DB 전문)                         │
-│ Backend: Codex (codex-1)                      │
+│ Backend: Codex (gpt-5.3-codex)                │
 │ Skills: schema-migration, sql-query           │
 │ 이유: 마이그레이션 작업에 전문 Agent 필요       │
 │                                               │
@@ -1915,7 +1920,7 @@ snapshot 업데이트 → orchestratorAgent 탐색 → runtime.backendId 읽기
   · PR 코드 리뷰 → Backend Coder
   · 단위 테스트 작성 → QA Tester
   · 결과 정리 → Orchestrator
-● [시스템] Backend: Claude Code / claude-sonnet-4-5-20250929
+● [시스템] Backend: Claude Code / claude-sonnet-4-6
 ```
 
 역할별 프리픽스:

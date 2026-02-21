@@ -1,5 +1,6 @@
 import type {
   AgentProfile,
+  BackendCapabilityProfile,
   BackendUsageSummary,
   CanonicalBackendId,
   McpServer,
@@ -72,7 +73,8 @@ export function buildCachedPrompt(input: CachedPromptInput): CachedPromptBlocks 
             "",
             "### Mid-execution queries",
             "- If a sub-agent raises a blocker, surface it to the user immediately rather than guessing.",
-            "- Format user-facing queries as: [QUERY] <question> [/QUERY]",
+            "- If user input is required, respond using exactly: [NEED_HUMAN: <question>].",
+            "- Do not use alternative query tags or plain prose for human-input requests.",
             "",
             "### Communication protocol",
             "- All agent-to-agent messages must route through the orchestrator; direct peer-to-peer bypasses are not allowed.",
@@ -151,6 +153,7 @@ export function buildAgentGenerationPrompt(input: {
   existingAgents: AgentProfile[];
   existingSkills: Skill[];
   existingMcpServers: McpServer[];
+  backendProfiles?: BackendCapabilityProfile[];
   preferredBackends?: CanonicalBackendId[];
   useSmartAssignment?: boolean;
   budgetConstraint?: "strict" | "soft";
@@ -177,6 +180,7 @@ export function buildAgentGenerationPrompt(input: {
     kind: server.kind,
     providerId: server.providerId
   }));
+  const modelSelectionGuide = buildModelSelectionGuide(input.backendProfiles);
 
   const staticBlock = [
     "You are an agent architecture designer.",
@@ -206,6 +210,9 @@ export function buildAgentGenerationPrompt(input: {
       2
     ),
     "",
+    "### Role-aware model selection guide",
+    JSON.stringify(modelSelectionGuide, null, 2),
+    "",
     "## Instructions",
     "1. Create agents with clear roles based on the user's request.",
     "2. Exactly one agent must be orchestrator (isOrchestrator=true).",
@@ -217,6 +224,8 @@ export function buildAgentGenerationPrompt(input: {
     "8. suggestedNewSkills[].name must be kebab-case folder names (example: \"api-schema-validator\").",
     "9. If something is a task, encode it in agent systemPrompt/delegation, not in suggestedNewSkills.",
     "10. assignedBackend must be explicit (claude|codex|gemini|aider|custom); never use auto.",
+    "11. assignedModel must be selected from the listed model guide for that assignedBackend.",
+    "12. backendAssignReason must mention both role fit and why the chosen model is appropriate.",
     "",
     "## Output schema",
     "{",
@@ -334,4 +343,119 @@ function estimatePromptTokens(text: string): number {
     return 0;
   }
   return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+type ModelGuideEntry = {
+  id: string;
+  tier: "fast" | "standard" | "advanced";
+  contextWindow: number;
+  costPer1MInput: number;
+  costPer1MOutput: number;
+  whenToUse: string;
+  recommendedRoles: string[];
+};
+
+type ModelGuideGroup = {
+  backendId: CanonicalBackendId;
+  models: ModelGuideEntry[];
+};
+
+const MODEL_USAGE_HINTS: Record<
+  string,
+  {
+    whenToUse: string;
+    recommendedRoles: string[];
+  }
+> = {
+  "claude-opus-4-6": {
+    whenToUse: "Most capable for complex work: deep architecture, hard reasoning, and final quality gates.",
+    recommendedRoles: ["orchestrator", "planner", "reviewer"]
+  },
+  "claude-sonnet-4-6": {
+    whenToUse: "Best for everyday tasks: balanced quality and speed.",
+    recommendedRoles: ["orchestrator", "planner", "reviewer", "coder"]
+  },
+  "claude-haiku-4-5-20251001": {
+    whenToUse: "Fastest for quick answers and lightweight tasks.",
+    recommendedRoles: ["writer", "researcher", "tester"]
+  },
+  "gpt-5.3-codex": {
+    whenToUse: "Latest frontier agentic coding model.",
+    recommendedRoles: ["coder", "tester", "reviewer"]
+  },
+  "gpt-5.3-codex-spark": {
+    whenToUse: "Ultra-fast coding model.",
+    recommendedRoles: ["coder", "tester"]
+  },
+  "gpt-5.2-codex": {
+    whenToUse: "Frontier agentic coding model.",
+    recommendedRoles: ["coder", "tester", "reviewer"]
+  },
+  "gpt-5.1-codex-max": {
+    whenToUse: "Codex-optimized flagship for deep and fast reasoning.",
+    recommendedRoles: ["orchestrator", "planner", "reviewer"]
+  },
+  "gpt-5.2": {
+    whenToUse: "Latest frontier model with improvements across knowledge, reasoning and coding.",
+    recommendedRoles: ["orchestrator", "planner", "coder", "reviewer"]
+  },
+  "gpt-5.1-codex-mini": {
+    whenToUse: "Optimized for codex. Cheaper, faster, but less capable.",
+    recommendedRoles: ["tester", "writer", "researcher"]
+  },
+  "gpt-4.1": {
+    whenToUse: "Stable fallback for compatibility-focused coding work.",
+    recommendedRoles: ["coder", "tester"]
+  },
+  "gpt-4o": {
+    whenToUse: "Multimodal fallback when image-aware context is needed.",
+    recommendedRoles: ["coder", "researcher", "writer"]
+  },
+  o3: {
+    whenToUse: "Reasoning-first fallback for difficult analysis and decision-heavy reviews.",
+    recommendedRoles: ["reviewer", "planner", "orchestrator"]
+  },
+  "gemini-3-pro-preview": {
+    whenToUse: "Best for deep research, long-context synthesis, and high-complexity analysis.",
+    recommendedRoles: ["researcher", "planner", "writer"]
+  },
+  "gemini-3-flash-preview": {
+    whenToUse: "Fast option for iterative research and medium-complexity tasks.",
+    recommendedRoles: ["researcher", "writer", "tester"]
+  },
+  "gemini-2.5-pro": {
+    whenToUse: "Stable high-quality fallback for complex reasoning.",
+    recommendedRoles: ["researcher", "writer", "reviewer"]
+  },
+  "gemini-2.5-flash": {
+    whenToUse: "Balanced speed and cost for general-purpose research and writing.",
+    recommendedRoles: ["researcher", "writer", "tester"]
+  },
+  "gemini-2.5-flash-lite": {
+    whenToUse: "Cheapest and fastest for bulk extraction and lightweight tasks.",
+    recommendedRoles: ["researcher", "writer"]
+  }
+};
+
+function buildModelSelectionGuide(profiles?: BackendCapabilityProfile[]): ModelGuideGroup[] {
+  const targetBackends: CanonicalBackendId[] = ["claude", "codex", "gemini"];
+  const selectedProfiles = (profiles ?? [])
+    .filter((profile) => targetBackends.includes(profile.backendId))
+    .sort((left, right) => targetBackends.indexOf(left.backendId) - targetBackends.indexOf(right.backendId));
+
+  return selectedProfiles.map((profile) => ({
+    backendId: profile.backendId,
+    models: profile.models.map((model) => {
+      const hint = MODEL_USAGE_HINTS[model.id];
+      return {
+        id: model.id,
+        tier: model.tier,
+        contextWindow: model.contextWindow,
+        costPer1MInput: model.costPer1MInput,
+        costPer1MOutput: model.costPer1MOutput,
+        whenToUse: hint?.whenToUse ?? `Use for ${model.tier} workloads under ${profile.displayName}.`,
+        recommendedRoles: hint?.recommendedRoles ?? ["coder", "reviewer"]
+      };
+    })
+  }));
 }

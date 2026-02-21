@@ -2494,6 +2494,11 @@ export default function App() {
                     onSelectTask={setSelectedScheduleTaskId}
                     onMoveTask={moveScheduleTask}
                     onPinTask={pinScheduleTask}
+                    onOpenDetail={(taskId) => {
+                      if (scheduleRunId) {
+                        setDetailTask({ taskId, runId: scheduleRunId });
+                      }
+                    }}
                   />
                 </ErrorBoundary>
               )}
@@ -2725,7 +2730,6 @@ export default function App() {
         onClose={() => setAgentCreationOpen(false)}
         onCreate={createAgent}
       />
-
       <AgentPreviewModal
         open={Boolean(generatedPreview)}
         structure={generatedPreview?.structure}
@@ -2742,6 +2746,7 @@ export default function App() {
         <TaskDetailModal
           taskId={detailTask.taskId}
           taskTitle={scheduleViewState.tasks.find((t) => t.id === detailTask.taskId)?.title}
+          taskStatus={scheduleViewState.tasks.find((t) => t.id === detailTask.taskId)?.status}
           runId={detailTask.runId}
           flowName={activeFlowName}
           onClose={() => setDetailTask(undefined)}
@@ -3066,6 +3071,10 @@ function handleExtensionMessage(
           ? `${message.payload.message}: ${message.payload.detail}`
           : message.payload.message
       });
+      return;
+    }
+    case "TASK_STREAM_CHUNK": {
+      // Handled directly by TaskDetailModal via onExtensionMessage subscription
       return;
     }
     case "TASK_DETAIL": {

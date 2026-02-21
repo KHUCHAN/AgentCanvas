@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import FileDiffCard from "../components/FileDiffCard";
+import HumanQueryCard from "../components/HumanQueryCard";
 import NodeContextCard from "../components/NodeContextCard";
 import TaskCompleteCard from "../components/TaskCompleteCard";
 import TaskStatusCard from "../components/TaskStatusCard";
@@ -15,6 +16,8 @@ type ChatMessageListProps = {
   onModifyPlan: (planId: string, modifications: WorkPlanModification[]) => Promise<void>;
   onCancelPlan: (planId: string) => Promise<void>;
   onStopTask: (taskId: string) => Promise<void>;
+  onRespondHumanQuery: (payload: { runId: string; taskId: string; answer: string }) => Promise<void>;
+  onOpenTaskDetail?: (taskId: string, runId: string) => void;
 };
 
 export default function ChatMessageList(props: ChatMessageListProps) {
@@ -93,6 +96,18 @@ export default function ChatMessageList(props: ChatMessageListProps) {
                 <div key={key} className="validation-item warning">
                   {content.description} ({content.options.join(" / ")})
                 </div>
+              );
+            }
+            if (content.kind === "human_query") {
+              return (
+                <HumanQueryCard
+                  key={key}
+                  runId={content.runId}
+                  taskId={content.taskId}
+                  question={content.question}
+                  onRespond={props.onRespondHumanQuery}
+                  onOpenTaskDetail={props.onOpenTaskDetail}
+                />
               );
             }
             if (content.kind === "run_event") {

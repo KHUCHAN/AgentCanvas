@@ -11,6 +11,10 @@ import type {
 } from "../types";
 import { CODEX_DEFAULT_AGENT_ID, VSCODE_WORKSPACE_AGENT_ID } from "./agentIds";
 import {
+  getBuiltinOrchestratorSkillIds,
+  getBuiltinOrchestratorSkills
+} from "./builtinSkills";
+import {
   COMMON_RULES_FOLDER,
   discoverExtensionManagedCommonRules
 } from "./commonRulesService";
@@ -41,22 +45,40 @@ export async function runDiscovery(
     vscodeAgentId: VSCODE_WORKSPACE_AGENT_ID
   });
 
+  // Inject built-in orchestration skills into orchestrator agents
+  const builtinSkillIds = getBuiltinOrchestratorSkillIds();
+  const enrichedAgents = agents.map((agent) => {
+    if (!agent.isOrchestrator) {
+      return agent;
+    }
+    const existing = new Set(agent.assignedSkillIds ?? []);
+    const merged = [...(agent.assignedSkillIds ?? [])];
+    for (const bid of builtinSkillIds) {
+      if (!existing.has(bid)) {
+        merged.push(bid);
+      }
+    }
+    return { ...agent, assignedSkillIds: merged };
+  });
+  const builtinSkills = getBuiltinOrchestratorSkills();
+  const enrichedSkills = [...skills, ...builtinSkills];
+
   const { nodes, edges } = await buildGraph({
     workspacePath: ctx.workspacePath,
-    agents,
-    skills,
+    agents: enrichedAgents,
+    skills: enrichedSkills,
     ruleDocs,
     commonRules,
     mcpServers
   });
 
   const primaryAgent =
-    agents.find((agent) => agent.id === VSCODE_WORKSPACE_AGENT_ID) ?? agents[0];
+    enrichedAgents.find((agent) => agent.id === VSCODE_WORKSPACE_AGENT_ID) ?? enrichedAgents[0];
 
   return {
     agent: primaryAgent,
-    agents,
-    skills,
+    agents: enrichedAgents,
+    skills: enrichedSkills,
     ruleDocs,
     commonRules,
     mcpServers,

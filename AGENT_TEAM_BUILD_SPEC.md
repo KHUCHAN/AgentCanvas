@@ -967,84 +967,145 @@ rebuildMode?: boolean  // hasTeamReady 값 전달
 ### 12.3 최신 모델 목록 — CLI 조사 결과
 
 #### Claude Code (`claude --model`)
-> `--model` 플래그: alias('sonnet', 'opus', 'haiku') 또는 full ID
+> 현재 코드 기준(2026-02-21), 실제 선택지는 3개만 사용한다.
+> `Default(recommended)=Opus 4.6`, `Sonnet=Sonnet 4.6`, `Haiku=Haiku 4.5`.
 
-| 전체 모델 ID | 별칭 | 티어 | 입력 비용/1M | 출력 비용/1M |
-|------------|------|------|------------|------------|
-| `claude-haiku-4-5-20251001` | `haiku` | Fast | $0.80 | $4.00 |
-| `claude-sonnet-4-5-20250929` | `sonnet` | Standard | $3.00 | $15.00 |
-| `claude-opus-4-5-20251101` | `opus` | Advanced | $15.00 | $75.00 |
-
-> 현재 `backendProfiles.ts`에 등록된 `haiku-4.5`, `sonnet-4.5`, `opus-4.5`는 내부 short alias —
-> `claude --model` 플래그에 전달 시 full ID 또는 공식 alias 사용 필요.
+| 전체 모델 ID | 티어 | 입력 비용/1M | 출력 비용/1M |
+|------------|------|------------|------------|
+| `claude-opus-4-6` | Advanced | $15.00 | $75.00 |
+| `claude-sonnet-4-6` | Standard | $3.00 | $15.00 |
+| `claude-haiku-4-5-20251001` | Fast | $0.80 | $4.00 |
 
 #### Codex CLI (`codex --model`)
-> 현재 VM에 미설치. OpenAI 공식 문서 기준.
+> 현재 코드 기준(2026-02-21), GPT-5 Codex 계열 + GPT-4 fallback이 반영되어 있음.
 
 | 모델 | 설명 | 컨텍스트 |
 |------|------|---------|
-| `gpt-4.1` | 코딩 최적화 최신 | 1M |
-| `gpt-4.1-mini` | 경량 | 1M |
-| `gpt-4.1-nano` | 초경량 | 1M |
-| `gpt-4o` | 멀티모달 | 128K |
-| `o3` | 고급 추론 | 200K |
-| `o3-mini` | 추론 경량 | 200K |
-| `o4-mini` | 추론 최신 경량 | 200K |
-| `codex-1` | 코드 특화 | 1M |
-
-> `backendProfiles.ts`에 `o3-mini`, `o3`, `codex-1`만 등록됨 — gpt-4.1 계열 미포함.
+| `gpt-5.3-codex` | GPT-5 Codex 주력 고성능 | 1M |
+| `gpt-5.3-codex-spark` | GPT-5 Codex 경량/고속 | 200K |
+| `gpt-5.2-codex` | GPT-5 Codex 표준 | 200K |
+| `gpt-5.1-codex-max` | GPT-5 Codex 고성능 | 1M |
+| `gpt-5.2` | GPT-5 일반 표준 | 200K |
+| `gpt-5.1-codex-mini` | GPT-5 Codex 미니 | 200K |
+| `gpt-4.1` | GPT-4 fallback | 200K |
+| `gpt-4o` | 멀티모달 fallback | 200K |
+| `o3` | 고급 추론 fallback | 200K |
 
 #### Gemini CLI (`gemini --model`)
-> 현재 VM에 미설치.
+> 현재 코드 기준(2026-02-21), 실제 선택지는 5개만 사용한다.
 
 | 모델 | 설명 | 컨텍스트 |
 |------|------|---------|
-| `gemini-2.5-pro` | 최고 성능 | 1M |
-| `gemini-2.5-flash` | 빠름 | 1M |
-| `gemini-2.0-flash` | 안정 | 1M |
-| `gemini-1.5-pro` | 하위 호환 | 1M |
-
-> `backendProfiles.ts`에 `gemini-2.5-flash`, `gemini-2.5-pro` 등록됨 — 비교적 최신이나 하위 버전 추가 권장.
+| `gemini-3-pro-preview` | Gemini 3 고성능 preview | 2M |
+| `gemini-3-flash-preview` | Gemini 3 고속 preview | 1M |
+| `gemini-2.5-pro` | 2.5 고성능 fallback | 1M |
+| `gemini-2.5-flash` | 2.5 고속 fallback | 1M |
+| `gemini-2.5-flash-lite` | 2.5 초경량 | 1M |
 
 ### 12.4 backendProfiles.ts 수정 스펙
 
 **파일:** `extension/src/services/backendProfiles.ts`
 
 ```ts
-// Claude backend models[] 교체
+// Claude backend models[] (실제 선택지 3개)
 models: [
-  { id: "claude-haiku-4-5-20251001",  tier: "fast",     contextWindow: 200_000, costPer1MInput: 0.8,  costPer1MOutput: 4.0  },
-  { id: "claude-sonnet-4-5-20250929", tier: "standard", contextWindow: 200_000, costPer1MInput: 3.0,  costPer1MOutput: 15.0 },
-  { id: "claude-opus-4-5-20251101",   tier: "advanced", contextWindow: 200_000, costPer1MInput: 15.0, costPer1MOutput: 75.0 },
+  { id: "claude-opus-4-6", tier: "advanced", contextWindow: 200_000, costPer1MInput: 15.0, costPer1MOutput: 75.0 },
+  { id: "claude-sonnet-4-6", tier: "standard", contextWindow: 200_000, costPer1MInput: 3.0, costPer1MOutput: 15.0 },
+  { id: "claude-haiku-4-5-20251001", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.8, costPer1MOutput: 4.0 },
 ],
 
-// Codex backend models[] 추가
+// Codex backend models[] (GPT-5 Codex family + GPT-4 fallback)
 models: [
-  { id: "gpt-4.1",      tier: "standard", contextWindow: 1_000_000, costPer1MInput: 2.0,  costPer1MOutput: 8.0  },
-  { id: "gpt-4.1-mini", tier: "fast",     contextWindow: 1_000_000, costPer1MInput: 0.4,  costPer1MOutput: 1.6  },
-  { id: "gpt-4.1-nano", tier: "fast",     contextWindow: 1_000_000, costPer1MInput: 0.1,  costPer1MOutput: 0.4  },
-  { id: "gpt-4o",       tier: "standard", contextWindow: 128_000,   costPer1MInput: 2.5,  costPer1MOutput: 10.0 },
-  { id: "o3",           tier: "advanced", contextWindow: 200_000,   costPer1MInput: 10.0, costPer1MOutput: 40.0 },
-  { id: "o3-mini",      tier: "standard", contextWindow: 200_000,   costPer1MInput: 1.1,  costPer1MOutput: 4.4  },
-  { id: "o4-mini",      tier: "fast",     contextWindow: 200_000,   costPer1MInput: 1.1,  costPer1MOutput: 4.4  },
-  { id: "codex-1",      tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 5.0,  costPer1MOutput: 20.0 },
+  { id: "gpt-5.3-codex", tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 5.0, costPer1MOutput: 20.0 },
+  { id: "gpt-5.3-codex-spark", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.5, costPer1MOutput: 2.0 },
+  { id: "gpt-5.2-codex", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.0, costPer1MOutput: 8.0 },
+  { id: "gpt-5.1-codex-max", tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 10.0, costPer1MOutput: 40.0 },
+  { id: "gpt-5.2", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.0, costPer1MOutput: 8.0 },
+  { id: "gpt-5.1-codex-mini", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.4, costPer1MOutput: 1.6 },
+  { id: "gpt-4.1", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.0, costPer1MOutput: 8.0 },
+  { id: "gpt-4o", tier: "standard", contextWindow: 200_000, costPer1MInput: 2.5, costPer1MOutput: 10.0 },
+  { id: "o3", tier: "advanced", contextWindow: 200_000, costPer1MInput: 10.0, costPer1MOutput: 40.0 },
 ],
 
-// Gemini backend models[] 추가
+// Gemini backend models[] (실제 선택지 5개)
 models: [
+  { id: "gemini-3-pro-preview", tier: "advanced", contextWindow: 2_000_000, costPer1MInput: 2.5, costPer1MOutput: 15.0 },
+  { id: "gemini-3-flash-preview", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.3, costPer1MOutput: 1.2 },
   { id: "gemini-2.5-pro",   tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 1.25, costPer1MOutput: 10.0 },
-  { id: "gemini-2.5-flash", tier: "fast",     contextWindow: 1_000_000, costPer1MInput: 0.15, costPer1MOutput: 0.6  },
-  { id: "gemini-2.0-flash", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.1,  costPer1MOutput: 0.4  },
-  { id: "gemini-1.5-pro",   tier: "standard", contextWindow: 1_000_000, costPer1MInput: 1.25, costPer1MOutput: 5.0  },
+  { id: "gemini-2.5-flash", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.15, costPer1MOutput: 0.6  },
+  { id: "gemini-2.5-flash-lite", tier: "fast", contextWindow: 1_000_000, costPer1MInput: 0.075, costPer1MOutput: 0.3 },
 ],
 ```
 
 ### 12.5 2차 검증 체크리스트
 
-- [ ] `backendProfiles.ts` Claude 모델이 full ID (`claude-sonnet-4-5-20250929` 등)으로 교체됐는가
-- [ ] `backendProfiles.ts` Codex 모델에 `gpt-4.1`, `o4-mini` 추가됐는가
+- [ ] `backendProfiles.ts` Claude 모델에 4.6 계열(`claude-opus-4-6`, `claude-sonnet-4-6`)이 반영됐는가
+- [ ] `backendProfiles.ts` Claude 모델이 3개 선택지(`Opus 4.6`, `Sonnet 4.6`, `Haiku 4.5`)만 유지되는가
+- [ ] `backendProfiles.ts` Codex 모델에 GPT-5 Codex 계열(`gpt-5.3-codex` 등)과 GPT-4 fallback이 반영됐는가
+- [ ] `backendProfiles.ts` Gemini 모델이 5개 선택지(`gemini-3-pro-preview`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`)로 유지되는가
 - [ ] `AgentPreviewModal`에 `rebuildMode` prop이 추가됐는가
 - [ ] `hasTeamReady=true` 상태에서 Rebuild 시 `overwriteExisting` 기본 체크됐는가
 - [ ] `chatBackendId`가 Orchestrator `runtime.backendId`와 자동 동기화되는가
 - [ ] Agent 생성 모달에서 Backend와 Model을 선택할 수 있는가
 - [ ] 신규 `modelOptions.ts` 파일이 생성됐는가
+
+---
+
+## 13. 3차 개정 — Orchestrator Human Query & Task Conversation (2026-02-21)
+
+이번 개정은 "사용자와의 질의응답은 Orchestrator만 수행" + "Canvas Task 더블클릭으로 agent↔orchestrator 전체 대화 확인" 요구를 반영한다.
+
+### 13.1 핵심 정책
+
+1. Human input 요청 포맷은 `[NEED_HUMAN: <question>]` 단일 표준으로 통일한다.
+2. 해당 규칙은 **Orchestrator 프롬프트에만** 주입한다.
+3. 런타임 감지도 Orchestrator 컨텍스트에서만 활성화한다(Worker 출력은 human query 트리거로 승격하지 않음).
+4. Task 더블클릭 시 해당 Task의 orchestrator↔agent 전체 turn transcript를 표시한다.
+5. Chat의 `human_query` 카드에서 답변 제출 시 `HUMAN_QUERY_RESPONSE`로 정확한 `runId/taskId`에 라우팅한다.
+
+### 13.2 반영된 구현
+
+| 항목 | 상태 | 파일 | 구현 내용 |
+|------|------|------|----------|
+| Orchestrator 전용 `NEED_HUMAN` 지시문 | ✅ | `extension/src/services/promptBuilder.ts` | `[NEED_HUMAN: <question>]` 정확 포맷 + 대체 태그 금지 문구 반영 |
+| 런타임 human query 감지 가드 | ✅ | `extension/src/extension.ts` | `taskAgent.isOrchestrator` 또는 orchestrator task일 때만 `parseHumanQuery` 실행 |
+| Human query 파서 서비스화 | ✅ | `extension/src/services/humanQuery.ts` | 표준 태그 + 레거시 fallback 파싱 지원 |
+| Task transcript 추출 서비스화 | ✅ | `extension/src/services/taskConversation.ts` | `run_log(task_conversation_turn)` 기반 turn 정규화/시간순 정렬 |
+| Task 대화 조회 프로토콜 | ✅ | `extension/src/messages/protocol.ts`, `webview-ui/src/messaging/protocol.ts` | `GET_TASK_CONVERSATION` / `TASK_CONVERSATION` 추가 |
+| Role-aware 모델 가이드 주입 | ✅ | `extension/src/services/promptBuilder.ts`, `extension/src/extension.ts` | 팀 빌드 프롬프트에 Claude/Codex/Gemini 모델별 `whenToUse` + `recommendedRoles` 포함 |
+| TaskDetail Conversation 탭 | ✅ | `webview-ui/src/panels/TaskDetailModal.tsx` | Task별 전체 대화 표시(Orchestrator/Agent role badge + timestamp) |
+| Canvas Task 더블클릭 연결 | ✅ | `webview-ui/src/views/KanbanView.tsx`, `webview-ui/src/canvas/ScheduleView.tsx`, `webview-ui/src/App.tsx` | 더블클릭 → TaskDetailModal 오픈 유지 |
+| Chat `human_query` 인라인 응답 카드 | ✅ | `webview-ui/src/components/HumanQueryCard.tsx`, `webview-ui/src/panels/ChatMessageList.tsx` | 질문 표시/답변 입력/전송 + Task 열기 버튼 |
+| HUMAN_QUERY_RESPONSE 처리 보강 | ✅ | `extension/src/extension.ts` | 공백 답변 차단, task ready 전이, chat history append, collab 이벤트 기록 |
+| Human query lifecycle 이벤트 | ✅ | `extension/src/services/collaborationLogger.ts`, `webview-ui/src/panels/RunPanel.tsx` | `human_query_requested`, `human_query_answered`, `task_resumed_after_human_query` 표시 |
+
+### 13.3 사용자 플로우 (최신)
+
+```
+Worker/Orchestrator 실행
+  → (Orchestrator 출력) [NEED_HUMAN: ...] 감지
+    → Task status: blocked(input)
+    → human_query chat card 생성
+    → collab event: human_query_requested
+
+사용자 응답 경로
+  A) AI Prompt 패널의 human_query 카드에서 답변 전송
+  B) TaskDetailModal/Task 동선에서 HUMAN_QUERY_RESPONSE 전송
+
+응답 반영
+  → Task status: ready
+  → task.meta.humanAnswer 저장
+  → collab event: human_query_answered
+  → collab event: task_resumed_after_human_query
+  → 실행 루프 재개
+```
+
+### 13.4 검증 결과
+
+- `npm run check` 통과
+- `npm run test:integration` 통과
+- 통합 테스트 추가:
+  - Orchestrator prompt `NEED_HUMAN` 규칙 검증
+  - `parseHumanQuery` 파서 검증
+  - Task conversation turn 추출/정렬 검증
+  - human query lifecycle(collab log) roundtrip 검증

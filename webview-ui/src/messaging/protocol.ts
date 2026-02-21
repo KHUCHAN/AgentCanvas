@@ -446,6 +446,20 @@ export type TaskCompleteSummary = {
   cost?: number;
 };
 
+export type TaskConversationRole = "orchestrator" | "agent";
+
+export type TaskConversationTurn = {
+  turnId: string;
+  runId: string;
+  taskId: string;
+  role: TaskConversationRole;
+  content: string;
+  timestamp: number;
+  agentId?: string;
+  backendId?: string;
+  model?: string;
+};
+
 export type FileDiffEntry = {
   path: string;
   additions: number;
@@ -716,6 +730,9 @@ export type RunEvent = {
     | "proposal_applied"
     | "proposal_rejected"
     | "announce"
+    | "human_query_requested"
+    | "human_query_answered"
+    | "task_resumed_after_human_query"
     | "memory_injected"
     | "run_log";
   nodeId?: string;
@@ -968,6 +985,7 @@ export type WebviewToExtensionMessage =
       data?: Record<string, unknown>;
     }>
   | RequestMessage<"GET_TASK_DETAIL", { runId: string; flowName: string; taskId: string; nodeId?: string }>
+  | RequestMessage<"GET_TASK_CONVERSATION", { runId: string; flowName: string; taskId: string }>
   | RequestMessage<"HUMAN_QUERY_RESPONSE", { runId: string; taskId: string; answer: string }>;
 
 export type ExtensionToWebviewMessage =
@@ -984,7 +1002,14 @@ export type ExtensionToWebviewMessage =
   | { type: "BACKEND_MODELS_UPDATE"; payload: { catalogs: BackendModelCatalog[] } }
   | { type: "BACKEND_QUOTA_UPDATE"; payload: { claude?: ClaudeQuotaSnapshot; codex?: CliSubscriptionQuota; gemini?: CliSubscriptionQuota } }
   | { type: "COLLAB_EVENT"; payload: {
-      event: "task_dispatched" | "proposal_submitted" | "proposal_reviewed" | "announce";
+      event:
+        | "task_dispatched"
+        | "proposal_submitted"
+        | "proposal_reviewed"
+        | "announce"
+        | "human_query_requested"
+        | "human_query_answered"
+        | "task_resumed_after_human_query";
       runId: string;
       flowName: string;
       actor: string;
@@ -998,6 +1023,7 @@ export type ExtensionToWebviewMessage =
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
   | { type: "CHAT_MESSAGE"; payload: { message: ChatMessage } }
   | { type: "CHAT_STREAM_CHUNK"; payload: { messageId: string; chunk: string } }
+  | { type: "TASK_STREAM_CHUNK"; payload: { taskId: string; chunk: string } }
   | { type: "WORK_PLAN_UPDATED"; payload: { plan: WorkPlan } }
   | { type: "TASK_STATUS_UPDATE"; payload: { update: TaskStatusUpdate } }
   | { type: "CHAT_HISTORY"; payload: { messages: ChatMessage[] } }
@@ -1018,6 +1044,7 @@ export type ExtensionToWebviewMessage =
   | { type: "ERROR"; payload: { message: string; detail?: string } }
   | { type: "RESPONSE_OK"; inReplyTo: RequestId; result?: unknown }
   | { type: "RESPONSE_ERROR"; inReplyTo: RequestId; error: { message: string; detail?: string } }
+  | { type: "TASK_CONVERSATION"; payload: { taskId: string; turns: TaskConversationTurn[] } }
   | { type: "TASK_DETAIL"; payload: { taskId: string; output?: string; events: Record<string, unknown>[] } };
 
 export function isResponseMessage(

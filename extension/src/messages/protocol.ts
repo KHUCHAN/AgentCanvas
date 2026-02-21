@@ -38,6 +38,7 @@ import type {
   SkillPackPreview,
   TaskEvent,
   TaskSubmissionOptions,
+  TaskConversationTurn,
   TaskStatus
 } from "../types";
 
@@ -270,6 +271,8 @@ export type WebviewToExtensionMessage =
     }>
   /** Fetch full event log for a task to display in the detail modal. */
   | RequestMessage<"GET_TASK_DETAIL", { runId: string; flowName: string; taskId: string; nodeId?: string }>
+  /** Fetch orchestrator↔agent conversation transcript for a task. */
+  | RequestMessage<"GET_TASK_CONVERSATION", { runId: string; flowName: string; taskId: string }>
   /** Human replies to an orchestrator question that blocked a task. */
   | RequestMessage<"HUMAN_QUERY_RESPONSE", { runId: string; taskId: string; answer: string }>;
 
@@ -287,7 +290,14 @@ export type ExtensionToWebviewMessage =
   | { type: "BACKEND_MODELS_UPDATE"; payload: { catalogs: BackendModelCatalog[] } }
   | { type: "BACKEND_QUOTA_UPDATE"; payload: { claude?: ClaudeQuotaSnapshot; codex?: CliSubscriptionQuota; gemini?: CliSubscriptionQuota } }
   | { type: "COLLAB_EVENT"; payload: {
-      event: "task_dispatched" | "proposal_submitted" | "proposal_reviewed" | "announce";
+      event:
+        | "task_dispatched"
+        | "proposal_submitted"
+        | "proposal_reviewed"
+        | "announce"
+        | "human_query_requested"
+        | "human_query_answered"
+        | "task_resumed_after_human_query";
       runId: string;
       flowName: string;
       actor: string;
@@ -301,6 +311,7 @@ export type ExtensionToWebviewMessage =
   | { type: "PROMPT_HISTORY"; payload: { items: PromptHistoryEntry[] } }
   | { type: "CHAT_MESSAGE"; payload: { message: ChatMessage } }
   | { type: "CHAT_STREAM_CHUNK"; payload: { messageId: string; chunk: string } }
+  | { type: "TASK_STREAM_CHUNK"; payload: { taskId: string; chunk: string } }
   | { type: "WORK_PLAN_UPDATED"; payload: { plan: WorkPlan } }
   | { type: "TASK_STATUS_UPDATE"; payload: { update: TaskStatusUpdate } }
   | { type: "CHAT_HISTORY"; payload: { messages: ChatMessage[] } }
@@ -321,6 +332,8 @@ export type ExtensionToWebviewMessage =
   | { type: "ERROR"; payload: { message: string; detail?: string } }
   | { type: "RESPONSE_OK"; inReplyTo: RequestId; result?: unknown }
   | { type: "RESPONSE_ERROR"; inReplyTo: RequestId; error: { message: string; detail?: string } }
+  /** Task conversation transcript — sent in reply to GET_TASK_CONVERSATION. */
+  | { type: "TASK_CONVERSATION"; payload: { taskId: string; turns: TaskConversationTurn[] } }
   /** Full event log for a task — sent in reply to GET_TASK_DETAIL. */
   | { type: "TASK_DETAIL"; payload: { taskId: string; output?: string; events: Record<string, unknown>[] } };
 

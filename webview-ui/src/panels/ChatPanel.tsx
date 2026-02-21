@@ -28,6 +28,8 @@ type ChatPanelProps = {
   onModifyPlan: (planId: string, modifications: WorkPlanModification[]) => Promise<void>;
   onCancelPlan: (planId: string) => Promise<void>;
   onStopTask: (taskId: string) => Promise<void>;
+  onRespondHumanQuery: (payload: { runId: string; taskId: string; answer: string }) => Promise<void>;
+  onOpenTaskDetail?: (taskId: string, runId: string) => void;
   onOpenBuildPrompt: () => void;
 };
 
@@ -58,6 +60,8 @@ export default function ChatPanel(props: ChatPanelProps) {
         onModifyPlan={props.onModifyPlan}
         onCancelPlan={props.onCancelPlan}
         onStopTask={props.onStopTask}
+        onRespondHumanQuery={props.onRespondHumanQuery}
+        onOpenTaskDetail={props.onOpenTaskDetail}
       />
 
       <ChatInput

@@ -491,6 +491,20 @@ export interface TaskCompleteSummary {
   cost?: number;
 }
 
+export type TaskConversationRole = "orchestrator" | "agent";
+
+export interface TaskConversationTurn {
+  turnId: string;
+  runId: string;
+  taskId: string;
+  role: TaskConversationRole;
+  content: string;
+  timestamp: number;
+  agentId?: string;
+  backendId?: string;
+  model?: string;
+}
+
 export interface FileDiffEntry {
   path: string;
   additions: number;
@@ -761,6 +775,9 @@ export interface RunEvent {
     | "proposal_applied"
     | "proposal_rejected"
     | "announce"
+    | "human_query_requested"
+    | "human_query_answered"
+    | "task_resumed_after_human_query"
     | "memory_injected"
     | "run_log";
   nodeId?: string;

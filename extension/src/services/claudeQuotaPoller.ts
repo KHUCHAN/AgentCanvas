@@ -73,6 +73,13 @@ export async function fetchClaudeQuotaSnapshot(backends: CliBackend[]): Promise<
   return parsed;
 }
 
+export function getCachedClaudeQuotaSnapshot(): ClaudeQuotaSnapshot | undefined {
+  if (claudeCache && claudeCache.expiresAt > Date.now()) {
+    return claudeCache.snapshot;
+  }
+  return undefined;
+}
+
 export function invalidateClaudeQuotaCache(): void { claudeCache = undefined; }
 
 // ─── Codex cache ─────────────────────────────────────────────────────────────
@@ -163,23 +170,6 @@ export function invalidateAllQuotaCaches(): void {
   claudeCache = undefined;
   codexCache = undefined;
   geminiCache = undefined;
-}
-
-// ─── Cache population (used by backendProbeService) ──────────────────────────
-
-/** Pre-populate the Claude quota cache from an external probe result. */
-export function populateClaudeQuotaCache(snapshot: ClaudeQuotaSnapshot): void {
-  claudeCache = { expiresAt: Date.now() + CACHE_TTL_MS, snapshot };
-}
-
-/** Pre-populate the Codex quota cache from an external probe result. */
-export function populateCodexQuotaCache(snapshot: CliSubscriptionQuota): void {
-  codexCache = { expiresAt: Date.now() + CACHE_TTL_MS, snapshot };
-}
-
-/** Pre-populate the Gemini quota cache from an external probe result. */
-export function populateGeminiQuotaCache(snapshot: CliSubscriptionQuota): void {
-  geminiCache = { expiresAt: Date.now() + CACHE_TTL_MS, snapshot };
 }
 
 // ─── Shared exec probe ───────────────────────────────────────────────────────

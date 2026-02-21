@@ -189,15 +189,47 @@ function buildPlannerPrompt(
   agents: AgentProfile[],
   backendId: NonAutoBackendId
 ): string {
+  const orchestrator = agents.find((a) => a.isOrchestrator);
+  const delegationGraph = orchestrator?.delegatesTo ?? [];
+
   const availableAgents = agents.length > 0
-    ? agents.map((agent) =>
-      `- id: ${agent.id}, name: ${agent.name}, role: ${agent.role}, backend: ${agent.runtime?.kind === "cli" ? agent.runtime.backendId : "auto"}`
-    ).join("\n")
+    ? agents.map((agent) => {
+      const parts = [
+        `id: ${agent.id}`,
+        `name: ${agent.name}`,
+        `role: ${agent.role}`,
+        `backend: ${agent.runtime?.kind === "cli" ? agent.runtime.backendId : "auto"}`
+      ];
+      if (agent.isOrchestrator) {
+        parts.push("isOrchestrator: true");
+      }
+      if (agent.delegatesTo && agent.delegatesTo.length > 0) {
+        parts.push(`delegatesTo: [${agent.delegatesTo.join(", ")}]`);
+      }
+      if (agent.assignedSkillIds && agent.assignedSkillIds.length > 0) {
+        parts.push(`skills: [${agent.assignedSkillIds.join(", ")}]`);
+      }
+      if (agent.description) {
+        parts.push(`description: "${agent.description}"`);
+      }
+      return `- ${parts.join(", ")}`;
+    }).join("\n")
     : "- id: unassigned, name: Unassigned, role: coder, backend: auto";
+
+  const teamStructureBlock = delegationGraph.length > 0
+    ? [
+      "",
+      "Team structure:",
+      `Orchestrator "${orchestrator?.name}" delegates to: ${delegationGraph.join(", ")}`,
+      "Only assign tasks to agents the orchestrator can delegate to.",
+      ""
+    ].join("\n")
+    : "";
 
   return [
     "You are the AgentCanvas orchestrator planner.",
     "Break the user request into actionable tasks and assign each task to the best agent.",
+    "Match agent roles to task types: coder for implementation, tester for QA, researcher for investigation, writer for docs.",
     "Return JSON only. No markdown fences, no prose.",
     "Schema:",
     "{",
@@ -206,6 +238,7 @@ function buildPlannerPrompt(
     '      "title": "short task title",',
     '      "description": "implementation detail",',
     '      "assignedAgentId": "agent id from list",',
+    '      "assignedAgentName": "agent name",',
     '      "assignedBackend": "claude|codex|gemini",',
     '      "priority": "high|medium|low",',
     '      "deps": [1]',
@@ -215,13 +248,15 @@ function buildPlannerPrompt(
     "",
     "Rules:",
     "- Use only agent ids in the list when assigning.",
+    "- Match task type to agent role (coder→coding, tester→testing, researcher→research).",
     "- Keep deps 1-based indexes and only point to earlier items.",
     "- Output 1 to 8 tasks.",
+    "- Assign each agent's native backend (the one listed in their profile).",
     "",
     `Preferred planner backend: ${backendId}`,
     "Available agents:",
     availableAgents,
-    "",
+    teamStructureBlock,
     "User request:",
     request
   ].join("\n");

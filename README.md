@@ -1,11 +1,15 @@
-# AgentCanvas
+# Open Claw
 
-AgentCanvas is a VS Code extension for designing and operating multi-agent systems on a visual canvas.
-It combines agent modeling, role/delegation management, prompt-driven team generation, and interaction pattern composition in one workspace.
+Open Claw is a VS Code extension for designing and operating multi-agent systems on a visual canvas.
+It combines agent modeling, chat-first orchestration workflow, prompt-driven team generation, and real-time task scheduling in one workspace.
 
 ## What This Project Includes
 
-- n8n-style canvas UI for agent orchestration
+- Visual canvas UI for multi-agent orchestration (Graph / Kanban / Schedule views)
+- Chat-first workflow
+  - Orchestrator-driven conversation interface
+  - Work plan generation and confirmation via chat
+  - Real-time task status streaming inline
 - Agent lifecycle management
   - Create/Delete custom agents
   - Role, description, system prompt, avatar, color editing
@@ -13,21 +17,21 @@ It combines agent modeling, role/delegation management, prompt-driven team gener
 - Skill and MCP assignment
   - Drag-and-drop from library to agent nodes
   - Assign/Unassign from agent detail modal
-- AI Prompt workflow
-  - CLI backend detection (Auto / Claude / Gemini / Codex / Aider / Custom)
-  - Prompt-to-team generation
-  - Preview and apply generated structures
-  - Prompt history (reapply/delete)
-- Interaction Pattern Library
-  - 20 predefined interaction patterns
-  - Pattern insert via button or drag/drop
-  - Interaction edge inspector with termination validation
+- AI-powered team build
+  - Multi-backend support (Claude / Gemini / Codex)
+  - Backend-aware agent assignment with usage budget balancing
+  - Prompt-to-team generation with preview and apply
+  - Codex cache fast-path for repeated builds
+- Task execution engine
+  - Parallel task scheduling with dependency resolution
+  - Stall detection and graceful cancellation
+  - Worker-to-Orchestrator question escalation (NEED_HUMAN flow)
 - Flow and observability support
   - Save/Load flow files: `.agentcanvas/flows/*.yaml`
   - Interaction event logs: `.agentcanvas/logs/<flow>/<date>.jsonl`
 - Quality gates
   - Build + typecheck pipeline
-  - Integration test scenarios and runnable integration script
+  - Integration test scenarios
 
 ## Architecture Overview
 
@@ -49,44 +53,40 @@ Then in VS Code:
 
 1. Open this project folder.
 2. Press `F5` to launch Extension Development Host.
-3. Open Command Palette and run `AgentCanvas: Open`.
+3. Open Command Palette and run `Open Claw: Open`.
 
 ## How to Use
 
-### 1) Build your agent graph
+### 1) Chat with Orchestrator
+
+1. Open the **Chat** panel on the right.
+2. Describe your work (e.g. "Build a login page with tests").
+3. The Orchestrator generates a work plan with tasks.
+4. Review the plan and click **Start Work Plan** to execute.
+
+### 2) Build your agent graph
 
 1. Click `New Agent` to create custom agents.
 2. Double-click an agent node to open `Agent Detail`.
 3. In `Overview`, set role, description, and orchestrator options.
 4. In `Delegates To`, choose worker agents for orchestration links.
 
-### 2) Assign skills and MCP servers
-
-1. Open `Node Library` on the right panel.
-2. Drag a `Skill` item onto an agent node to assign it.
-3. Drag an `MCP Server` item onto an agent node to assign it.
-4. Use `Agent Detail -> Skills/MCP` tabs to unassign or adjust mappings.
-
 ### 3) Generate teams from prompt
 
-1. Open the `AI Prompt` tab.
-2. Select backend (`Auto`, `Claude`, `Gemini`, `Codex`, `Aider`, or `Custom`).
-3. Enter a request (for example: code review team with orchestrator + workers).
-4. Click `Generate Agent Team`.
-5. Review the preview modal and click `Apply to Canvas`.
+1. Enter a build prompt in the Build Prompt Bar.
+2. Backends are auto-assigned per agent based on work intent.
+3. Review the preview modal and click `Apply to Canvas`.
 
-### 4) Use interaction patterns
+### 4) Monitor execution
 
-1. In `Node Library`, find `Interaction Patterns`.
-2. Click `Insert` or drag a pattern onto the canvas.
-3. Click an interaction edge, open Inspector, and edit interaction JSON.
-4. Keep a valid `termination` field (required for saving valid interaction config).
+1. Switch to **Kanban** view to see task status columns (Ready / Running / Done / Failed).
+2. Switch to **Schedule** view for timeline-based Gantt visualization.
+3. Double-click a task node for detailed logs and agent question responses.
 
 ### 5) Save and reload flows
 
 1. Click `Save Flow` to persist current interaction graph.
 2. Click `Load Flow` and enter/select a saved flow name.
-3. Check logs in `.agentcanvas/logs/<flow>/<date>.jsonl` for interaction events.
 
 ## Integration Tests
 
@@ -106,30 +106,14 @@ Covers:
 
 ## UI Screenshot
 
-![AgentCanvas UI](docs/screenshots/agentcanvas-ui.png)
+![Open Claw UI](docs/screenshots/agentcanvas-ui.png)
 
-## Known Issues & Pending Fixes (2026-02-20)
+## Core Spec Docs
 
-> 상세 스펙은 각 문서 참조. 구현 상태는 코드 정적 분석으로 검증.
-
-| ID | 심각도 | 증상 | 관련 파일 | 스펙 |
-|----|--------|------|----------|------|
-| NEW-1 | 🔴 P0 | Chat 메시지 보내도 화면에 미표시 | `App.tsx:1717` | UI_REVISION_WORKORDER §TASK-9 |
-| NEW-2 | 🔴 P0 | Rebuild 후 기존 Agent 미삭제 | `AgentPreviewModal.tsx:37` | UI_REVISION_WORKORDER §TASK-8 |
-| NEW-3 | 🟠 P1 | Orchestrator Backend가 Chat에 미반영 | `App.tsx:136` | UI_REVISION_WORKORDER §TASK-11 |
-| NEW-4 | 🟠 P1 | Build Prompt Bar가 Zoom 버튼 가림 | `styles.css` | UI_REVISION_WORKORDER §TASK-16 |
-| NEW-5 | 🟡 P2 | 팀 Apply 후 노드 겹침/미정렬 | `GraphView.tsx` | UI_REVISION_WORKORDER §TASK-17 |
-| NEW-6 | 🟡 P2 | CLI 모델 목록 최신화 필요 | `backendProfiles.ts` | AGENT_TEAM_BUILD_SPEC §12.3 |
-
-## Related Docs
-
-- `README.md`
-- `INTEGRATION_TEST_SCENARIOS.md`
-- `AGENT_SYSTEM.md`
-- `PROMPT_TO_AGENTS.md`
-- `agent communication.md`
-- `BUG_FIX_SPEC.md` — 전체 버그/기능 분석 원본
-- `UI_REVISION_WORKORDER.md` — UI 수정 작업지시서 (1차 + 2차)
-- `CODE_REVIEW2.md` — 코드 리뷰 이슈 목록 (1차 23건 + 2차 9건)
-- `CHAT_WORKFLOW_SPEC.md` — Chat 시스템 설계
-- `AGENT_TEAM_BUILD_SPEC.md` — 팀 빌드 & 모델 스펙
+- `FRAMEWORK.md` — 전체 시스템 아키텍처
+- `WORKFLOW.md` — 작업 실행 흐름 설계
+- `CHAT_WORKFLOW_SPEC.md` — Chat-first 워크플로우 설계
+- `AGENT_TEAM_BUILD_SPEC.md` — 팀 빌드 & 백엔드 할당 시스템
+- `UI.md` — UI 컴포넌트 설계
+- `UX.md` — UX 설계 원칙
+- `EFFECT_ASSET_PROMPTS.md` — 에셋 프롬프트 가이드
