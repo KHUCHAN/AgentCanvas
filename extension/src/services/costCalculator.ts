@@ -8,16 +8,29 @@ type PricingEntry = {
   output: number;
 };
 
-const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 
 const DEFAULT_PRICING: Record<string, PricingEntry> = {
+  // Claude 4.6 pricing
+  "claude-sonnet-4-6": { input: 3.0, cacheWrite: 3.75, cacheRead: 0.3, output: 15.0 },
+  "claude-opus-4-6": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 },
+  "sonnet-4.6": { input: 3.0, cacheWrite: 3.75, cacheRead: 0.3, output: 15.0 },
+  "opus-4.6": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 },
+  // Claude 4.5 pricing (legacy)
   "claude-sonnet-4-5-20250929": { input: 3.0, cacheWrite: 3.75, cacheRead: 0.3, output: 15.0 },
   "claude-haiku-4-5-20251001": { input: 0.8, cacheWrite: 1.0, cacheRead: 0.08, output: 4.0 },
   "claude-opus-4-5-20251101": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 },
   "sonnet-4.5": { input: 3.0, cacheWrite: 3.75, cacheRead: 0.3, output: 15.0 },
   "haiku-4.5": { input: 0.8, cacheWrite: 1.0, cacheRead: 0.08, output: 4.0 },
   "opus-4.5": { input: 15.0, cacheWrite: 18.75, cacheRead: 1.5, output: 75.0 },
-  // Codex / OpenAI pricing
+  // GPT-5.x Codex pricing
+  "gpt-5.3-codex": { input: 5.0, cacheWrite: 0, cacheRead: 0, output: 20.0 },
+  "gpt-5.3-codex-spark": { input: 0.5, cacheWrite: 0, cacheRead: 0, output: 2.0 },
+  "gpt-5.2-codex": { input: 2.0, cacheWrite: 0, cacheRead: 0, output: 8.0 },
+  "gpt-5.1-codex-max": { input: 10.0, cacheWrite: 0, cacheRead: 0, output: 40.0 },
+  "gpt-5.2": { input: 2.0, cacheWrite: 0, cacheRead: 0, output: 8.0 },
+  "gpt-5.1-codex-mini": { input: 0.4, cacheWrite: 0, cacheRead: 0, output: 1.6 },
+  // Codex / OpenAI legacy pricing
   "gpt-4.1": { input: 2.0, cacheWrite: 0, cacheRead: 0, output: 8.0 },
   "gpt-4.1-mini": { input: 0.4, cacheWrite: 0, cacheRead: 0, output: 1.6 },
   "gpt-4.1-nano": { input: 0.2, cacheWrite: 0, cacheRead: 0, output: 0.8 },
@@ -27,7 +40,10 @@ const DEFAULT_PRICING: Record<string, PricingEntry> = {
   "o3": { input: 10.0, cacheWrite: 0, cacheRead: 0, output: 40.0 },
   "o4-mini": { input: 1.0, cacheWrite: 0, cacheRead: 0, output: 4.0 },
   "codex-1": { input: 5.0, cacheWrite: 0, cacheRead: 0, output: 20.0 },
-  // Gemini pricing
+  // Gemini 3.x pricing
+  "gemini-3-pro-preview": { input: 2.5, cacheWrite: 0.625, cacheRead: 0.25, output: 15.0 },
+  "gemini-3-flash-preview": { input: 0.3, cacheWrite: 0.075, cacheRead: 0.03, output: 1.2 },
+  // Gemini 2.x pricing (legacy)
   "gemini-2.5-flash": { input: 0.15, cacheWrite: 0.0375, cacheRead: 0.015, output: 0.6 },
   "gemini-2.5-flash-lite": { input: 0.075, cacheWrite: 0.01875, cacheRead: 0.0075, output: 0.3 },
   "gemini-2.5-pro": { input: 1.25, cacheWrite: 0.3125, cacheRead: 0.125, output: 10.0 },
@@ -44,23 +60,32 @@ export function resolvePricingModel(modelId?: string): string {
     return modelId;
   }
   const lower = modelId.toLowerCase();
-  if (lower === "sonnet" || lower.includes("sonnet-4.5")) {
+  // Claude 4.6 aliases
+  if (lower === "sonnet" || lower === "sonnet-4.6" || lower.includes("sonnet-4-6")) {
+    return "claude-sonnet-4-6";
+  }
+  if (lower === "opus" || lower === "opus-4.6" || lower.includes("opus-4-6")) {
+    return "claude-opus-4-6";
+  }
+  // Claude 4.5 legacy aliases
+  if (lower === "sonnet-4.5" || lower.includes("sonnet-4-5")) {
     return "claude-sonnet-4-5-20250929";
   }
-  if (lower === "haiku" || lower.includes("haiku-4.5")) {
+  if (lower === "haiku" || lower === "haiku-4.5" || lower.includes("haiku-4-5")) {
     return "claude-haiku-4-5-20251001";
   }
-  if (lower === "opus" || lower.includes("opus-4.5")) {
+  if (lower === "opus-4.5" || lower.includes("opus-4-5")) {
     return "claude-opus-4-5-20251101";
   }
-  if (lower.includes("gemini")) {
-    return "gemini-2.5-flash";
+  // GPT-5.x / Codex aliases
+  if (lower === "codex" || lower === "codex-latest") {
+    return "gpt-5.3-codex";
+  }
+  if (lower.includes("gpt-5")) {
+    return "gpt-5.3-codex";
   }
   if (lower.includes("codex")) {
-    return "codex-1";
-  }
-  if (lower === "codex-latest") {
-    return "codex-1";
+    return "gpt-5.3-codex";
   }
   if (lower.includes("gpt-4.1")) {
     return "gpt-4.1";
@@ -83,17 +108,31 @@ export function resolvePricingModel(modelId?: string): string {
   if (lower.includes("o4-mini")) {
     return "o4-mini";
   }
-  if (lower === "gemini-flash" || lower === "gemini-2.5-flash-latest") {
+  // Gemini 3.x aliases
+  if (lower === "gemini" || lower === "gemini-flash") {
+    return "gemini-3-flash-preview";
+  }
+  if (lower === "gemini-pro") {
+    return "gemini-3-pro-preview";
+  }
+  if (lower.includes("gemini-3")) {
+    return "gemini-3-flash-preview";
+  }
+  // Gemini 2.x legacy aliases
+  if (lower === "gemini-2.5-flash-latest") {
     return "gemini-2.5-flash";
   }
   if (lower === "gemini-flash-lite" || lower === "gemini-2.5-flash-lite-latest") {
     return "gemini-2.5-flash-lite";
   }
-  if (lower === "gemini-pro" || lower === "gemini-2.5-pro-latest") {
+  if (lower === "gemini-2.5-pro-latest") {
     return "gemini-2.5-pro";
   }
   if (lower === "gemini-2.0-flash-lite-latest") {
     return "gemini-2.0-flash-lite";
+  }
+  if (lower.includes("gemini")) {
+    return "gemini-3-flash-preview";
   }
   return DEFAULT_MODEL;
 }

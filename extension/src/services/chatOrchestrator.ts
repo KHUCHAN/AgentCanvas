@@ -531,13 +531,13 @@ function inferBackendFromText(text: string, fallback: NonAutoBackendId): NonAuto
 
 function resolveModelHint(backendId: NonAutoBackendId): string | undefined {
   if (backendId === "claude") {
-    return "claude-sonnet-4-5-20250929";
+    return "claude-sonnet-4-6";
   }
   if (backendId === "codex") {
-    return "gpt-4.1";
+    return "gpt-5.3-codex";
   }
   if (backendId === "gemini") {
-    return "gemini-2.5-flash";
+    return "gemini-3-flash-preview";
   }
   return undefined;
 }

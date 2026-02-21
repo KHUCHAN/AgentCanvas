@@ -1,9 +1,9 @@
 import type { AgentProfile, CacheConfig, CanonicalBackendId } from "../types";
 
 const BACKEND_DEFAULT_MODELS: Record<CanonicalBackendId, string> = {
-  claude: "claude-sonnet-4-5-20250929",
-  codex: "gpt-4.1",
-  gemini: "gemini-2.5-flash",
+  claude: "claude-sonnet-4-6",
+  codex: "gpt-5.3-codex",
+  gemini: "gemini-3-flash-preview",
   aider: "",
   custom: ""
 };

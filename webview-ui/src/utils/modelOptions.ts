@@ -10,12 +10,20 @@ export type ModelOption = {
 };
 
 const CLAUDE_OPTIONS: ModelOption[] = [
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6" },
+  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
   { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
   { id: "claude-opus-4-5-20251101", label: "Claude Opus 4.5" }
 ];
 
 const CODEX_OPTIONS: ModelOption[] = [
+  { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+  { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
+  { id: "gpt-5.2-codex", label: "GPT-5.2 Codex" },
+  { id: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
+  { id: "gpt-5.2", label: "GPT-5.2" },
+  { id: "gpt-5.1-codex-mini", label: "GPT-5.1 Codex Mini" },
   { id: "gpt-4.1", label: "GPT-4.1" },
   { id: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
   { id: "gpt-4.1-nano", label: "GPT-4.1 Nano" },
@@ -28,6 +36,8 @@ const CODEX_OPTIONS: ModelOption[] = [
 ];
 
 const GEMINI_OPTIONS: ModelOption[] = [
+  { id: "gemini-3-pro-preview", label: "Gemini 3 Pro" },
+  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
   { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
   { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
   { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },

@@ -91,7 +91,7 @@ export class TokenTracker {
       outputTokens: 0,
       cost: 0,
       savedCost: 0,
-      model: "claude-sonnet-4-5-20250929",
+      model: "claude-sonnet-4-6",
       callCount: 0
     };
   }

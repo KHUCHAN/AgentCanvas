@@ -678,7 +678,13 @@ function parseUsage(
 
 function inferModelFromBackend(backendId: CliBackend["id"]): string | undefined {
   if (backendId === "claude" || backendId === "claude-code") {
-    return "claude-sonnet-4-5-20250929";
+    return "claude-sonnet-4-6";
+  }
+  if (backendId === "codex" || backendId === "codex-cli") {
+    return "gpt-5.3-codex";
+  }
+  if (backendId === "gemini" || backendId === "gemini-cli") {
+    return "gemini-3-flash-preview";
   }
   return undefined;
 }

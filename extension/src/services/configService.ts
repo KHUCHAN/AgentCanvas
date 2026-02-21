@@ -19,7 +19,7 @@ export const DEFAULT_CACHE_CONFIG: CacheConfig = {
   modelRouting: {
     heartbeat: "claude-haiku-4-5-20251001",
     cron: "claude-haiku-4-5-20251001",
-    default: "claude-sonnet-4-5-20250929"
+    default: "claude-sonnet-4-6"
   },
   contextThreshold: 180_000
 };
@@ -132,14 +132,26 @@ function normalizeModel(value: unknown, fallback: string): string {
     return fallback;
   }
   const lower = trimmed.toLowerCase();
-  if (lower === "sonnet" || lower === "sonnet-4.5") {
+  // Claude 4.6 aliases
+  if (lower === "sonnet" || lower === "sonnet-4.6") {
+    return "claude-sonnet-4-6";
+  }
+  if (lower === "opus" || lower === "opus-4.6") {
+    return "claude-opus-4-6";
+  }
+  // Claude 4.5 legacy aliases
+  if (lower === "sonnet-4.5") {
     return "claude-sonnet-4-5-20250929";
   }
   if (lower === "haiku" || lower === "haiku-4.5") {
     return "claude-haiku-4-5-20251001";
   }
-  if (lower === "opus" || lower === "opus-4.5") {
+  if (lower === "opus-4.5") {
     return "claude-opus-4-5-20251101";
+  }
+  // Codex aliases
+  if (lower === "codex-latest") {
+    return "gpt-5.3-codex";
   }
   if (lower === "gpt-4.1-latest") {
     return "gpt-4.1";
@@ -147,16 +159,20 @@ function normalizeModel(value: unknown, fallback: string): string {
   if (lower === "gpt-4o-latest") {
     return "gpt-4o";
   }
-  if (lower === "codex-latest") {
-    return "codex-1";
+  // Gemini aliases
+  if (lower === "gemini-flash") {
+    return "gemini-3-flash-preview";
   }
-  if (lower === "gemini-flash" || lower === "gemini-2.5-flash-latest") {
+  if (lower === "gemini-pro") {
+    return "gemini-3-pro-preview";
+  }
+  if (lower === "gemini-2.5-flash-latest") {
     return "gemini-2.5-flash";
   }
   if (lower === "gemini-flash-lite" || lower === "gemini-2.5-flash-lite-latest") {
     return "gemini-2.5-flash-lite";
   }
-  if (lower === "gemini-pro" || lower === "gemini-2.5-pro-latest") {
+  if (lower === "gemini-2.5-pro-latest") {
     return "gemini-2.5-pro";
   }
   if (lower === "gemini-2.0-flash-lite-latest") {

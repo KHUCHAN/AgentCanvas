@@ -142,21 +142,21 @@ function pickModel(
   }
   if (backendId === "claude") {
     if (role === "orchestrator" || role === "planner" || role === "reviewer") {
-      return profile.models.find((model) => model.id === "claude-sonnet-4-5-20250929")?.id ?? profile.models[0].id;
+      return profile.models.find((model) => model.id === "claude-sonnet-4-6")?.id ?? profile.models[0].id;
     }
     return profile.models.find((model) => model.tier === "fast")?.id ?? profile.models[0].id;
   }
   if (backendId === "codex") {
     if (role === "coder" || role === "tester") {
-      return profile.models.find((model) => model.id === "gpt-4.1")?.id ?? profile.models[0].id;
+      return profile.models.find((model) => model.id === "gpt-5.3-codex")?.id ?? profile.models[0].id;
     }
-    return profile.models.find((model) => model.id === "codex-1")?.id ?? profile.models[0].id;
+    return profile.models.find((model) => model.id === "gpt-5.3-codex")?.id ?? profile.models[0].id;
   }
   if (backendId === "gemini") {
     if (role === "researcher" || role === "writer") {
-      return profile.models.find((model) => model.id === "gemini-2.5-flash")?.id ?? profile.models[0].id;
+      return profile.models.find((model) => model.id === "gemini-3-flash-preview")?.id ?? profile.models[0].id;
     }
-    return profile.models.find((model) => model.id === "gemini-2.5-pro")?.id ?? profile.models[0].id;
+    return profile.models.find((model) => model.id === "gemini-3-pro-preview")?.id ?? profile.models[0].id;
   }
   return profile.models[0].id;
 }

@@ -1,4 +1,7 @@
 import { execFile, spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type {
   BackendModelCatalog,
@@ -12,8 +15,8 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const ORDER: CanonicalBackendId[] = ["claude", "codex", "gemini", "aider", "custom"];
 const GEMINI_STATIC_MODELS = [
   // Gemini 3 (from /model CLI — latest first)
-  "gemini-3-pro",
-  "gemini-3-flash",
+  "gemini-3-pro-preview",
+  "gemini-3-flash-preview",
   // Gemini 2.5
   "gemini-2.5-pro",
   "gemini-2.5-flash",
@@ -103,6 +106,80 @@ export function populateModelCatalogCache(probedCatalogs: BackendModelCatalog[])
   };
 }
 
+/** Max age for local cache files before we ignore them (30 minutes). */
+const LOCAL_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * Read Codex model list from ~/.codex/models_cache.json (fast-path).
+ * Only models with visibility "list" are included.
+ * Returns empty array if the file is missing, unreadable, or stale.
+ */
+async function tryReadCodexCacheFile(): Promise<BackendModelCatalog["models"]> {
+  try {
+    const cachePath = join(homedir(), ".codex", "models_cache.json");
+    const raw = await readFile(cachePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      fetched_at?: string;
+      models?: Array<{
+        slug?: string;
+        display_name?: string;
+        visibility?: string;
+      }>;
+    };
+
+    // Check staleness via fetched_at
+    if (parsed.fetched_at) {
+      const fetchedAt = new Date(parsed.fetched_at).getTime();
+      if (Number.isFinite(fetchedAt) && Date.now() - fetchedAt > LOCAL_CACHE_MAX_AGE_MS) {
+        return [];
+      }
+    }
+
+    if (!Array.isArray(parsed.models) || parsed.models.length === 0) {
+      return [];
+    }
+
+    return parsed.models
+      .filter((m) => typeof m.slug === "string" && m.slug.trim() && m.visibility !== "hide")
+      .map((m) => ({
+        id: m.slug!.trim(),
+        label: m.display_name?.trim() || m.slug!.trim()
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Read used model IDs from ~/.claude/stats-cache.json (supplementary).
+ * This only contains models the user has previously used, not the full
+ * available list. Returns empty array if unavailable.
+ */
+async function tryReadClaudeStatsCache(): Promise<BackendModelCatalog["models"]> {
+  try {
+    const cachePath = join(homedir(), ".claude", "stats-cache.json");
+    const raw = await readFile(cachePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      modelUsage?: Record<string, unknown>;
+    };
+
+    if (!parsed.modelUsage || typeof parsed.modelUsage !== "object") {
+      return [];
+    }
+
+    const modelIds = Object.keys(parsed.modelUsage)
+      .filter((id) => id.startsWith("claude-") && id.trim().length > 0);
+
+    if (modelIds.length === 0) {
+      return [];
+    }
+
+    return modelIds.map((id) => ({ id, label: id }));
+  } catch {
+    return [];
+  }
+}
+
 async function fetchDynamicModelList(
   backend: CliBackend,
   backendId: CanonicalBackendId
@@ -140,32 +217,52 @@ async function fetchDynamicModelList(
     }
   }
 
-  if (backendId === "claude" || backendId === "codex") {
-    const regex =
-      backendId === "claude"
-        ? /(claude-[a-z0-9.-]+)/gi
-        : /(gpt-[\w.-]+|o[134][\w.-]*|codex-[\w.-]+)/gi;
-    // Try stdin /model probe first
-    const stdinModels = await tryStdinModelProbe(backend.command, regex);
+  if (backendId === "codex") {
+    // Fast-path: read ~/.codex/models_cache.json directly (no CLI spawn)
+    const cachedModels = await tryReadCodexCacheFile();
+    if (cachedModels.length > 0) {
+      return cachedModels;
+    }
+    // Slow fallback: CLI probe
+    const codexRegex = /(gpt-[\w.-]+|o[134][\w.-]*|codex-[\w.-]+)/gi;
+    const stdinModels = await tryStdinModelProbe(backend.command, codexRegex);
     if (stdinModels.length > 0) {
       return stdinModels.map((id) => ({ id, label: id }));
     }
-    const attempts = backendId === "claude"
-      ? [
-          ["--list-models", "--json"],
-          ["--list-models"],
-          ["models", "list", "--json"],
-          ["models", "list"]
-        ]
-      : [
-          ["models", "list", "--json"],
-          ["models", "list"],
-          ["--list-models", "--json"],
-          ["--list-models"]
-        ];
-    const models = await resolveModelsFromCommandAttempts(backend.command, attempts, regex);
+    const codexAttempts = [
+      ["models", "list", "--json"],
+      ["models", "list"],
+      ["--list-models", "--json"],
+      ["--list-models"]
+    ];
+    const models = await resolveModelsFromCommandAttempts(backend.command, codexAttempts, codexRegex);
     if (models.length > 0) {
       return models.map((id) => ({ id, label: id }));
+    }
+  }
+
+  if (backendId === "claude") {
+    // Fast-path: supplement from ~/.claude/stats-cache.json (partial, used models only)
+    const claudeRegex = /(claude-[a-z0-9.-]+)/gi;
+    // Try stdin /model probe first (most complete)
+    const stdinModels = await tryStdinModelProbe(backend.command, claudeRegex);
+    if (stdinModels.length > 0) {
+      return stdinModels.map((id) => ({ id, label: id }));
+    }
+    const claudeAttempts = [
+      ["--list-models", "--json"],
+      ["--list-models"],
+      ["models", "list", "--json"],
+      ["models", "list"]
+    ];
+    const models = await resolveModelsFromCommandAttempts(backend.command, claudeAttempts, claudeRegex);
+    if (models.length > 0) {
+      return models.map((id) => ({ id, label: id }));
+    }
+    // Last resort: read stats-cache for previously-used models
+    const statsModels = await tryReadClaudeStatsCache();
+    if (statsModels.length > 0) {
+      return statsModels;
     }
   }
 

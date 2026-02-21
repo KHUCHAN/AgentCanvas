@@ -33,6 +33,10 @@ export const BACKEND_PROFILES: BackendCapabilityProfile[] = [
     },
     limitations: ["Higher API cost", "Limited provider-native integrations"],
     models: [
+      // Claude 4.6 family (latest)
+      { id: "claude-opus-4-6", tier: "advanced", contextWindow: 200_000, costPer1MInput: 15.0, costPer1MOutput: 75.0 },
+      { id: "claude-sonnet-4-6", tier: "standard", contextWindow: 200_000, costPer1MInput: 3.0, costPer1MOutput: 15.0 },
+      // Claude 4.5 family (legacy)
       { id: "claude-haiku-4-5-20251001", tier: "fast", contextWindow: 200_000, costPer1MInput: 0.8, costPer1MOutput: 4.0 },
       { id: "claude-sonnet-4-5-20250929", tier: "standard", contextWindow: 200_000, costPer1MInput: 3.0, costPer1MOutput: 15.0 },
       { id: "claude-opus-4-5-20251101", tier: "advanced", contextWindow: 200_000, costPer1MInput: 15.0, costPer1MOutput: 75.0 }
@@ -104,8 +108,8 @@ export const BACKEND_PROFILES: BackendCapabilityProfile[] = [
     limitations: ["Can be weaker at deep refactoring consistency"],
     models: [
       // Gemini 3 family (from /model CLI output — latest first)
-      { id: "gemini-3-pro", tier: "advanced", contextWindow: 2_000_000, costPer1MInput: 2.5, costPer1MOutput: 15.0 },
-      { id: "gemini-3-flash", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.3, costPer1MOutput: 1.2 },
+      { id: "gemini-3-pro-preview", tier: "advanced", contextWindow: 2_000_000, costPer1MInput: 2.5, costPer1MOutput: 15.0 },
+      { id: "gemini-3-flash-preview", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.3, costPer1MOutput: 1.2 },
       // Gemini 2.5 family
       { id: "gemini-2.5-pro", tier: "advanced", contextWindow: 1_000_000, costPer1MInput: 1.25, costPer1MOutput: 10.0 },
       { id: "gemini-2.5-flash", tier: "standard", contextWindow: 1_000_000, costPer1MInput: 0.15, costPer1MOutput: 0.6 },
