@@ -22,6 +22,7 @@ type StatusBarProps = {
   claudeQuota?: ClaudeQuotaSnapshot;
   showBuildNew: boolean;
   onBuildNew: () => void;
+  isBusy?: boolean;
 };
 
 export default function StatusBar(props: StatusBarProps) {
@@ -34,7 +35,7 @@ export default function StatusBar(props: StatusBarProps) {
   const quotaText = buildQuotaText(props.claudeQuota);
 
   return (
-    <div className="status-bar">
+    <div className={`status-bar ${props.isBusy ? "is-busy-shimmer" : ""}`}>
       <div className="status-bar-section">
         <span>Agents {props.agents}</span>
         <span>Tasks {props.tasks}</span>

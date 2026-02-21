@@ -176,7 +176,7 @@ export default function BuildPromptBar(props: BuildPromptBarProps) {
         </button>
         <button
           type="button"
-          className="build-prompt-primary compact"
+          className={`build-prompt-primary compact ${props.isBuilding ? "is-busy-shimmer" : ""}`}
           onClick={triggerBuild}
           disabled={props.isBuilding || !canBuild}
         >
@@ -419,7 +419,7 @@ export default function BuildPromptBar(props: BuildPromptBarProps) {
             </button>
           )}
           <button
-            className="build-prompt-primary"
+            className={`build-prompt-primary ${props.isBuilding ? "is-busy-shimmer" : ""}`}
             type="button"
             onClick={triggerBuild}
             disabled={props.isBuilding || !canBuild}

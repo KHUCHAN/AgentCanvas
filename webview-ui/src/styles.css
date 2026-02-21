@@ -214,7 +214,18 @@ button {
   color: var(--fg);
   border-radius: 9px;
   padding: 6px 10px;
-  transition: 120ms ease;
+  transition: all 0.15s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.top-actions button:active,
+.right-panel button:active,
+.canvas-controls button:active,
+.canvas-plus:active,
+.canvas-add-agent:active,
+.canvas-common-rule:active {
+  transform: scale(0.96);
 }
 
 .top-actions button:hover,
@@ -224,7 +235,7 @@ button {
 .canvas-add-agent:hover,
 .canvas-common-rule:hover {
   border-color: color-mix(in srgb, var(--accent) 65%, var(--line-strong));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 15%, transparent);
   transform: translateY(-1px);
 }
 
@@ -235,6 +246,12 @@ button {
   display: grid;
   grid-template-columns: 1fr auto;
   overflow: hidden;
+  animation: view-fade-in 0.3s ease-out;
+}
+
+@keyframes view-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .graph-view {
@@ -850,6 +867,7 @@ button {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .right-panel-tabs {
@@ -895,6 +913,12 @@ button {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  animation: panel-fade-in 0.25s ease-out;
+}
+
+@keyframes panel-fade-in {
+  from { opacity: 0; transform: translateX(4px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 .panel-mode-subtitle {
@@ -3020,11 +3044,19 @@ button {
   background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
   padding: 10px;
   cursor: grab;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
 }
 
 .kanban-card:hover {
   border-color: color-mix(in srgb, var(--secondary) 68%, var(--line-strong));
-  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  transform: translateY(-2px) scale(1.01);
+}
+
+.kanban-column.progress .kanban-card:hover {
+  box-shadow: 0 0 15px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .kanban-card:active {
@@ -3033,11 +3065,18 @@ button {
 
 .kanban-card.is-selected {
   border-color: color-mix(in srgb, var(--accent) 72%, var(--line-strong));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 8px 20px rgba(0, 0, 0, 0.25);
 }
 
 .kanban-card.failed {
   border-left: 3px solid var(--danger);
+  animation: subtle-shake 0.4s ease-in-out;
+}
+
+@keyframes subtle-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-1.5px); }
+  75% { transform: translateX(1.5px); }
 }
 
 .kanban-card.blocked {
@@ -3342,4 +3381,33 @@ button {
   .right-panel-tabs button {
     flex-basis: calc(50% - 6px);
   }
+}
+
+/* Loading Shimmer Effect */
+.is-busy-shimmer {
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.is-busy-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.08),
+    transparent
+  );
+  animation: shimmer 1.5s infinite;
+  pointer-events: none;
+  z-index: 10;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
 }

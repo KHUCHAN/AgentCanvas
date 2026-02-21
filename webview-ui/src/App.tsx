@@ -2632,6 +2632,7 @@ export default function App() {
           onBuildNew={() => {
             setForceBuildPrompt(true);
           }}
+          isBusy={busy}
         />
       </section>
 

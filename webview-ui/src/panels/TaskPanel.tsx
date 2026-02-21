@@ -112,7 +112,7 @@ export default function TaskPanel(props: TaskPanelProps) {
         <div className="task-panel-actions">
           <button
             type="button"
-            className="task-panel-primary"
+            className={`task-panel-primary ${submitting ? "is-busy-shimmer" : ""}`}
             onClick={() => void submit()}
             disabled={submitting || !instruction.trim()}
           >
